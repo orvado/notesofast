@@ -347,17 +347,6 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_SORT_TITLE:
         SetSortOrder(Database::SortBy::Title);
         break;
-    }
-        break;
-    case IDM_SORT_MODIFIED:
-        SetSortOrder(Database::SortBy::DateModified);
-        break;
-    case IDM_SORT_CREATED:
-        SetSortOrder(Database::SortBy::DateCreated);
-        break;
-    case IDM_SORT_TITLE:
-        SetSortOrder(Database::SortBy::Title);
-        break;
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
             m_isDirty = true;
@@ -761,7 +750,7 @@ void MainWindow::AddChecklistItem() {
     if (m_currentNoteIndex >= 0) {
         wchar_t buffer[256];
         GetWindowText(m_hwndChecklistEdit, buffer, 256);
-        std::string itemText(buffer, buffer + wcslen(buffer));
+        std::string itemText = Utils::WideToUtf8(buffer);
         
         if (!itemText.empty()) {
             ChecklistItem newItem;
