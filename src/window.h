@@ -21,7 +21,10 @@ protected:
     void OnCreate();
     void OnSize(int width, int height);
     void OnCommand(WPARAM wParam, LPARAM lParam);
-    void OnNotify(WPARAM wParam, LPARAM lParam);
+    LRESULT OnNotify(WPARAM wParam, LPARAM lParam);
+    void OnLButtonDown(int x, int y);
+    void OnLButtonUp(int x, int y);
+    void OnMouseMove(int x, int y);
 
     void LoadNotesList(const std::wstring& filter = L"");
     void LoadNoteContent(int index);
@@ -66,4 +69,8 @@ protected:
     bool m_showArchived = false;
     Database::SortBy m_sortBy = Database::SortBy::DateModified;
     bool m_checklistMode = false;
+
+    int m_splitPos = 250;
+    bool m_isDraggingSplitter = false;
+    static const int SPLITTER_WIDTH = 5;
 };

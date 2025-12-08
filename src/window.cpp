@@ -97,11 +97,30 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         OnCommand(wParam, lParam);
         return 0;
     case WM_NOTIFY:
-        OnNotify(wParam, lParam);
-        return 0;
+        return OnNotify(wParam, lParam);
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
+    case WM_LBUTTONDOWN:
+        OnLButtonDown(LOWORD(lParam), HIWORD(lParam));
+        return 0;
+    case WM_LBUTTONUP:
+        OnLButtonUp(LOWORD(lParam), HIWORD(lParam));
+        return 0;
+    case WM_MOUSEMOVE:
+        OnMouseMove(LOWORD(lParam), HIWORD(lParam));
+        return 0;
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT) {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(m_hwnd, &pt);
+            if (pt.x >= m_splitPos && pt.x < m_splitPos + SPLITTER_WIDTH) {
+                SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+                return TRUE;
+            }
+        }
+        return DefWindowProc(m_hwnd, uMsg, wParam, lParam);
     case WM_PAINT:
         {
             PAINTSTRUCT ps;
@@ -350,7 +369,7 @@ void MainWindow::OnSize(int width, int height) {
 
     // Calculate remaining area
     int clientHeight = height - statusHeight - toolbarHeight;
-    int listWidth = 250; // Fixed width for list for now
+    int listWidth = m_splitPos;
     int searchHeight = 25;
 
     // Resize Search Box
@@ -360,6 +379,10 @@ void MainWindow::OnSize(int width, int height) {
     MoveWindow(m_hwndList, 0, toolbarHeight + searchHeight, listWidth, clientHeight - searchHeight, TRUE);
 
     // Resize Edit Control or Checklist Controls
+    int rightPaneX = listWidth + SPLITTER_WIDTH;
+    int rightPaneWidth = width - rightPaneX;
+    if (rightPaneWidth < 0) rightPaneWidth = 0;
+
     if (m_checklistMode) {
         int buttonWidth = 80;
         int buttonHeight = 25;
@@ -368,7 +391,7 @@ void MainWindow::OnSize(int width, int height) {
         int checklistHeight = clientHeight - editHeight - buttonHeight - 10;
         
         // Checklist edit box
-        MoveWindow(m_hwndChecklistEdit, listWidth + 5, toolbarHeight, width - listWidth - buttonWidth * 4 - 25, editHeight, TRUE);
+        MoveWindow(m_hwndChecklistEdit, rightPaneX + 5, toolbarHeight, rightPaneWidth - buttonWidth * 4 - 25, editHeight, TRUE);
         
         // Buttons
         MoveWindow(m_hwndAddItem, width - buttonWidth * 4 - 10, toolbarHeight, buttonWidth, buttonHeight, TRUE);
@@ -377,9 +400,9 @@ void MainWindow::OnSize(int width, int height) {
         MoveWindow(m_hwndMoveDown, width - buttonWidth - 10, toolbarHeight, buttonWidth, buttonHeight, TRUE);
         
         // Checklist list
-        MoveWindow(m_hwndChecklistList, listWidth, checklistTop, width - listWidth, checklistHeight, TRUE);
+        MoveWindow(m_hwndChecklistList, rightPaneX, checklistTop, rightPaneWidth, checklistHeight, TRUE);
     } else {
-        MoveWindow(m_hwndEdit, listWidth, toolbarHeight, width - listWidth, clientHeight, TRUE);
+        MoveWindow(m_hwndEdit, rightPaneX, toolbarHeight, rightPaneWidth, clientHeight, TRUE);
     }
 }
 
@@ -478,7 +501,7 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     }
 }
 
-void MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
+LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
     LPNMHDR pnmh = (LPNMHDR)lParam;
     if (pnmh->idFrom == ID_CHECKLIST_LIST) {
         if (pnmh->code == NM_DBLCLK) {
@@ -498,8 +521,7 @@ void MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             LPNMLVCUSTOMDRAW lplvcd = (LPNMLVCUSTOMDRAW)lParam;
             switch (lplvcd->nmcd.dwDrawStage) {
             case CDDS_PREPAINT:
-                SetWindowLongPtr(m_hwnd, DWLP_MSGRESULT, CDRF_NOTIFYITEMDRAW);
-                return;
+                return CDRF_NOTIFYITEMDRAW;
             case CDDS_ITEMPREPAINT:
                 {
                     int index = (int)lplvcd->nmcd.dwItemSpec;
@@ -526,15 +548,17 @@ void MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
                             lplvcd->clrText = RGB(0, 0, 255); // Blue text for pinned
                         }
                     }
-                    SetWindowLongPtr(m_hwnd, DWLP_MSGRESULT, CDRF_NEWFONT);
+                    return CDRF_NEWFONT;
                 }
-                return;
             }
         }
         // Handle Right Click for Context Menu
         else if (pnmh->code == NM_RCLICK) {
              LPNMITEMACTIVATE pnmitem = (LPNMITEMACTIVATE)lParam;
              if (pnmitem->iItem != -1) {
+                 // Select the item
+                 ListView_SetItemState(m_hwndList, pnmitem->iItem, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                 
                  HMENU hMenu = CreatePopupMenu();
                  
                  // Add Color Submenu
@@ -562,6 +586,36 @@ void MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             SendMessage(m_hwndEdit, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
             ShellExecute(NULL, L"open", &url[0], NULL, NULL, SW_SHOWNORMAL);
         }
+    }
+    return 0;
+}
+
+void MainWindow::OnLButtonDown(int x, int y) {
+    if (x >= m_splitPos && x < m_splitPos + SPLITTER_WIDTH) {
+        m_isDraggingSplitter = true;
+        SetCapture(m_hwnd);
+    }
+}
+
+void MainWindow::OnLButtonUp(int x, int y) {
+    if (m_isDraggingSplitter) {
+        m_isDraggingSplitter = false;
+        ReleaseCapture();
+    }
+}
+
+void MainWindow::OnMouseMove(int x, int y) {
+    if (m_isDraggingSplitter) {
+        RECT rc;
+        GetClientRect(m_hwnd, &rc);
+        
+        // Limit splitter range
+        int minWidth = 100;
+        if (x < minWidth) x = minWidth;
+        if (x > rc.right - minWidth) x = rc.right - minWidth;
+        
+        m_splitPos = x;
+        OnSize(rc.right, rc.bottom); // Trigger layout update
     }
 }
 

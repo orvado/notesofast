@@ -246,11 +246,11 @@ bool Database::InitializeColors() {
     if (count == 0) {
         const char* insertSql = "INSERT INTO colors (name, hex_color) VALUES "
             "('None', '#FFFFFF'),"
-            "('Personal', '#3498db'),"
-            "('Work', '#e74c3c'),"
-            "('Ideas', '#f1c40f'),"
-            "('Important', '#e67e22'),"
-            "('Shopping', '#2ecc71')";
+            "('Personal', '#D6EAF8'),"
+            "('Work', '#FADBD8'),"
+            "('Ideas', '#FCF3CF'),"
+            "('Important', '#FAE5D3'),"
+            "('Shopping', '#D5F5E3')";
         
         char* errMsg = nullptr;
         int rc = sqlite3_exec(m_db, insertSql, nullptr, nullptr, &errMsg);
@@ -258,6 +258,21 @@ bool Database::InitializeColors() {
             std::cerr << "SQL error initializing colors: " << errMsg << std::endl;
             sqlite3_free(errMsg);
             return false;
+        }
+    } else {
+        // Migration: Update old vibrant colors to muted ones
+        const char* updateSql = 
+            "UPDATE colors SET hex_color = '#D6EAF8' WHERE name = 'Personal' AND hex_color = '#3498db';"
+            "UPDATE colors SET hex_color = '#FADBD8' WHERE name = 'Work' AND hex_color = '#e74c3c';"
+            "UPDATE colors SET hex_color = '#FCF3CF' WHERE name = 'Ideas' AND hex_color = '#f1c40f';"
+            "UPDATE colors SET hex_color = '#FAE5D3' WHERE name = 'Important' AND hex_color = '#e67e22';"
+            "UPDATE colors SET hex_color = '#D5F5E3' WHERE name = 'Shopping' AND hex_color = '#2ecc71';";
+            
+        char* errMsg = nullptr;
+        sqlite3_exec(m_db, updateSql, nullptr, nullptr, &errMsg);
+        if (errMsg) {
+            std::cerr << "Color migration error: " << errMsg << std::endl;
+            sqlite3_free(errMsg);
         }
     }
     return true;
