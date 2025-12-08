@@ -73,4 +73,6 @@ protected:
     int m_splitPos = 250;
     bool m_isDraggingSplitter = false;
     static const int SPLITTER_WIDTH = 5;
+    
+    HFONT m_hFont = NULL;
 };
