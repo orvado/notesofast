@@ -27,6 +27,24 @@
 #define IDM_SORT_MODIFIED 301
 #define IDM_SORT_CREATED 302
 #define IDM_SORT_TITLE 303
+#define IDM_FORMAT_BOLD 401
+#define IDM_FORMAT_ITALIC 402
+#define IDM_FORMAT_UNDERLINE 403
+#define IDM_EXPORT_TXT 501
+
+WNDPROC g_oldEditProc = NULL;
+
+LRESULT CALLBACK ChecklistEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
+        HWND hParent = GetParent(hwnd);
+        SendMessage(hParent, WM_COMMAND, MAKEWPARAM(ID_ADD_ITEM, BN_CLICKED), (LPARAM)hwnd);
+        return 0;
+    }
+    if (uMsg == WM_CHAR && wParam == VK_RETURN) {
+        return 0; // Prevent beep
+    }
+    return CallWindowProc(g_oldEditProc, hwnd, uMsg, wParam, lParam);
+}
 
 MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdit(NULL), m_hwndSearch(NULL), m_hwndToolbar(NULL), m_hwndStatus(NULL), m_db(db) {
     m_colors = m_db->GetColors();
@@ -92,6 +110,34 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             EndPaint(m_hwnd, &ps);
         }
         return 0;
+    case WM_HOTKEY:
+        switch (wParam) {
+        case 1: // Ctrl+N
+            CreateNewNote();
+            break;
+        case 2: // Ctrl+S
+            SaveCurrentNote();
+            break;
+        case 3: // Ctrl+D
+            DeleteCurrentNote();
+            break;
+        case 4: // Ctrl+P
+            TogglePinCurrentNote();
+            break;
+        case 5: // Ctrl+F
+            SetFocus(m_hwndSearch);
+            break;
+        case 6: // Ctrl+B
+            ToggleFormat(CFM_BOLD, CFE_BOLD);
+            break;
+        case 7: // Ctrl+I
+            ToggleFormat(CFM_ITALIC, CFE_ITALIC);
+            break;
+        case 8: // Ctrl+U
+            ToggleFormat(CFM_UNDERLINE, CFE_UNDERLINE);
+            break;
+        }
+        return 0;
     default:
         return DefWindowProc(m_hwnd, uMsg, wParam, lParam);
     }
@@ -136,11 +182,25 @@ void MainWindow::OnCreate() {
     HFONT hFont = CreateFont(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
     SendMessage(m_hwndEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
 
+    // Enable Auto-URL detection
+    SendMessage(m_hwndEdit, EM_AUTOURLDETECT, TRUE, 0);
+    SendMessage(m_hwndEdit, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_LINK);
+
     // Create Toolbar (Top)
     m_hwndToolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT, 0, 0, 0, 0, m_hwnd, (HMENU)ID_TOOLBAR, GetModuleHandle(NULL), NULL);
     SendMessage(m_hwndToolbar, TB_BUTTONSTRUCTSIZE, (WPARAM)sizeof(TBBUTTON), 0);
     
-    TBBUTTON tbb[7];
+    // Register Hotkeys
+    RegisterHotKey(m_hwnd, 1, MOD_CONTROL, 'N'); // New
+    RegisterHotKey(m_hwnd, 2, MOD_CONTROL, 'S'); // Save
+    RegisterHotKey(m_hwnd, 3, MOD_CONTROL, 'D'); // Delete
+    RegisterHotKey(m_hwnd, 4, MOD_CONTROL, 'P'); // Pin
+    RegisterHotKey(m_hwnd, 5, MOD_CONTROL, 'F'); // Find (Focus Search)
+    RegisterHotKey(m_hwnd, 6, MOD_CONTROL, 'B'); // Bold
+    RegisterHotKey(m_hwnd, 7, MOD_CONTROL, 'I'); // Italic
+    RegisterHotKey(m_hwnd, 8, MOD_CONTROL, 'U'); // Underline
+
+    TBBUTTON tbb[8];
     ZeroMemory(tbb, sizeof(tbb));
     
     tbb[0].iBitmap = I_IMAGENONE;
@@ -162,31 +222,67 @@ void MainWindow::OnCreate() {
     tbb[2].iString = (INT_PTR)L"Delete";
 
     tbb[3].iBitmap = I_IMAGENONE;
-    tbb[3].idCommand = IDM_PIN;
+    tbb[3].idCommand = IDM_EXPORT_TXT;
     tbb[3].fsState = TBSTATE_ENABLED;
-    tbb[3].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[3].iString = (INT_PTR)L"Pin";
+    tbb[3].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+    tbb[3].iString = (INT_PTR)L"Export";
 
     tbb[4].iBitmap = I_IMAGENONE;
-    tbb[4].idCommand = IDM_ARCHIVE;
+    tbb[4].idCommand = IDM_PIN;
     tbb[4].fsState = TBSTATE_ENABLED;
     tbb[4].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[4].iString = (INT_PTR)L"Archive";
+    tbb[4].iString = (INT_PTR)L"Pin";
 
     tbb[5].iBitmap = I_IMAGENONE;
-    tbb[5].idCommand = IDM_SHOW_ARCHIVED;
+    tbb[5].idCommand = IDM_ARCHIVE;
     tbb[5].fsState = TBSTATE_ENABLED;
     tbb[5].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[5].iString = (INT_PTR)L"Show Archived";
+    tbb[5].iString = (INT_PTR)L"Archive";
 
     tbb[6].iBitmap = I_IMAGENONE;
-    tbb[6].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[6].idCommand = IDM_SHOW_ARCHIVED;
     tbb[6].fsState = TBSTATE_ENABLED;
     tbb[6].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[6].iString = (INT_PTR)L"Checklist";
+    tbb[6].iString = (INT_PTR)L"Show Archived";
 
-    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 7, (LPARAM)&tbb);
+    tbb[7].iBitmap = I_IMAGENONE;
+    tbb[7].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[7].fsState = TBSTATE_ENABLED;
+    tbb[7].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[7].iString = (INT_PTR)L"Checklist";
+
+    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 8, (LPARAM)&tbb);
     
+    // Add Separator
+    TBBUTTON tbbSep;
+    ZeroMemory(&tbbSep, sizeof(tbbSep));
+    tbbSep.fsStyle = BTNS_SEP;
+    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 1, (LPARAM)&tbbSep);
+
+    // Add Formatting Buttons
+    TBBUTTON tbbFormat[3];
+    ZeroMemory(tbbFormat, sizeof(tbbFormat));
+
+    tbbFormat[0].iBitmap = I_IMAGENONE;
+    tbbFormat[0].idCommand = IDM_FORMAT_BOLD;
+    tbbFormat[0].fsState = TBSTATE_ENABLED;
+    tbbFormat[0].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbbFormat[0].iString = (INT_PTR)L"B";
+
+    tbbFormat[1].iBitmap = I_IMAGENONE;
+    tbbFormat[1].idCommand = IDM_FORMAT_ITALIC;
+    tbbFormat[1].fsState = TBSTATE_ENABLED;
+    tbbFormat[1].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbbFormat[1].iString = (INT_PTR)L"I";
+
+    tbbFormat[2].iBitmap = I_IMAGENONE;
+    tbbFormat[2].idCommand = IDM_FORMAT_UNDERLINE;
+    tbbFormat[2].fsState = TBSTATE_ENABLED;
+    tbbFormat[2].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbbFormat[2].iString = (INT_PTR)L"U";
+
+    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 3, (LPARAM)&tbbFormat);
+
     // Add Sort Button (Dropdown style would be better but let's use a button that opens a menu)
     TBBUTTON tbbSort;
     ZeroMemory(&tbbSort, sizeof(tbbSort));
@@ -214,6 +310,8 @@ void MainWindow::OnCreate() {
         WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_CHECKLIST_EDIT, GetModuleHandle(NULL), NULL);
 
+    g_oldEditProc = (WNDPROC)SetWindowLongPtr(m_hwndChecklistEdit, GWLP_WNDPROC, (LONG_PTR)ChecklistEditProc);
+
     m_hwndAddItem = CreateWindow(L"BUTTON", L"Add Item", 
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_ADD_ITEM, GetModuleHandle(NULL), NULL);
@@ -222,11 +320,11 @@ void MainWindow::OnCreate() {
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_REMOVE_ITEM, GetModuleHandle(NULL), NULL);
 
-    m_hwndMoveUp = CreateWindow(L"BUTTON", L"↑", 
+    m_hwndMoveUp = CreateWindow(L"BUTTON", L"Up", 
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_MOVE_UP, GetModuleHandle(NULL), NULL);
 
-    m_hwndMoveDown = CreateWindow(L"BUTTON", L"↓", 
+    m_hwndMoveDown = CreateWindow(L"BUTTON", L"Down", 
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_MOVE_DOWN, GetModuleHandle(NULL), NULL);
 
@@ -296,6 +394,9 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_DELETE:
         DeleteCurrentNote();
         break;
+    case IDM_EXPORT_TXT:
+        ExportCurrentNote();
+        break;
     case IDM_PIN:
         TogglePinCurrentNote();
         break;
@@ -346,6 +447,15 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         break;
     case IDM_SORT_TITLE:
         SetSortOrder(Database::SortBy::Title);
+        break;
+    case IDM_FORMAT_BOLD:
+        ToggleFormat(CFM_BOLD, CFE_BOLD);
+        break;
+    case IDM_FORMAT_ITALIC:
+        ToggleFormat(CFM_ITALIC, CFE_ITALIC);
+        break;
+    case IDM_FORMAT_UNDERLINE:
+        ToggleFormat(CFM_UNDERLINE, CFE_UNDERLINE);
         break;
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
@@ -440,6 +550,17 @@ void MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
                  TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, m_hwnd, NULL);
                  DestroyMenu(hMenu);
              }
+        }
+    } else if (pnmh->code == EN_LINK) {
+        ENLINK* pLink = (ENLINK*)lParam;
+        if (pLink->msg == WM_LBUTTONDOWN) {
+            // Open URL in default browser
+            std::vector<wchar_t> url(pLink->chrg.cpMax - pLink->chrg.cpMin + 1);
+            TEXTRANGE tr;
+            tr.chrg = pLink->chrg;
+            tr.lpstrText = &url[0];
+            SendMessage(m_hwndEdit, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
+            ShellExecute(NULL, L"open", &url[0], NULL, NULL, SW_SHOWNORMAL);
         }
     }
 }
@@ -694,6 +815,11 @@ void MainWindow::ToggleChecklistMode() {
 }
 
 void MainWindow::UpdateChecklistUI() {
+    // Force layout update to ensure controls are sized correctly
+    RECT rcClient;
+    GetClientRect(m_hwnd, &rcClient);
+    OnSize(rcClient.right - rcClient.left, rcClient.bottom - rcClient.top);
+
     if (m_checklistMode && m_currentNoteIndex >= 0) {
         ShowWindow(m_hwndEdit, SW_HIDE);
         ShowWindow(m_hwndChecklistList, SW_SHOW);
@@ -715,8 +841,8 @@ void MainWindow::UpdateChecklistUI() {
             lvi.iSubItem = 0;
             lvi.lParam = item.id;
             
-            std::wstring displayText = item.is_checked ? L"☑ " : L"☐ ";
-            displayText += std::wstring(item.item_text.begin(), item.item_text.end());
+            std::wstring displayText = item.is_checked ? L"[x] " : L"[ ] ";
+            displayText += Utils::Utf8ToWide(item.item_text);
             lvi.pszText = (LPWSTR)displayText.c_str();
             
             ListView_InsertItem(m_hwndChecklistList, &lvi);
@@ -762,6 +888,7 @@ void MainWindow::AddChecklistItem() {
                 m_notes[m_currentNoteIndex].checklist_items.push_back(newItem);
                 UpdateChecklistUI();
                 SetWindowText(m_hwndChecklistEdit, L"");
+                SetFocus(m_hwndChecklistEdit);
             }
         }
     }
@@ -839,6 +966,90 @@ void MainWindow::ToggleChecklistItemCheck(int index) {
         if (m_db->ToggleChecklistItem(item.id, item.is_checked)) {
             UpdateChecklistUI();
             ListView_SetItemState(m_hwndChecklistList, index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        }
+    }
+}
+
+void MainWindow::ToggleFormat(DWORD mask, DWORD effect) {
+    CHARFORMAT2 cf;
+    ZeroMemory(&cf, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = mask;
+    
+    // Get current formatting
+    SendMessage(m_hwndEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    
+    // Toggle effect
+    if (cf.dwEffects & effect) {
+        cf.dwEffects &= ~effect;
+    } else {
+        cf.dwEffects |= effect;
+    }
+    
+    // Apply new formatting
+    SendMessage(m_hwndEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    
+    // Update button state
+    UpdateFormatButtons();
+}
+
+void MainWindow::UpdateFormatButtons() {
+    CHARFORMAT2 cf;
+    ZeroMemory(&cf, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE;
+    
+    SendMessage(m_hwndEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    
+    SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_FORMAT_BOLD, (cf.dwEffects & CFE_BOLD) ? TRUE : FALSE);
+    SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_FORMAT_ITALIC, (cf.dwEffects & CFE_ITALIC) ? TRUE : FALSE);
+    SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_FORMAT_UNDERLINE, (cf.dwEffects & CFE_UNDERLINE) ? TRUE : FALSE);
+}
+
+void MainWindow::ExportCurrentNote() {
+    if (m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size()) {
+        const Note& note = m_notes[m_currentNoteIndex];
+        
+        // Prepare default filename
+        std::wstring wTitle = Utils::Utf8ToWide(note.title);
+        // Sanitize filename
+        for (auto& c : wTitle) {
+            if (wcschr(L"<>:\"/\\|?*", c)) c = L'_';
+        }
+        wTitle += L".txt";
+        
+        OPENFILENAME ofn;
+        wchar_t szFile[260];
+        wcscpy_s(szFile, wTitle.c_str());
+        
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = m_hwnd;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrDefExt = L"txt";
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+        
+        if (GetSaveFileName(&ofn) == TRUE) {
+            HANDLE hFile = CreateFile(ofn.lpstrFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                std::string content = note.content;
+                if (note.is_checklist) {
+                    content = note.title + "\n\n";
+                    for (const auto& item : note.checklist_items) {
+                        content += (item.is_checked ? "[x] " : "[ ] ") + item.item_text + "\n";
+                    }
+                }
+                
+                DWORD dwWritten;
+                WriteFile(hFile, content.c_str(), (DWORD)content.length(), &dwWritten, NULL);
+                CloseHandle(hFile);
+                MessageBox(m_hwnd, L"Note exported successfully.", L"Export", MB_OK | MB_ICONINFORMATION);
+            } else {
+                MessageBox(m_hwnd, L"Failed to save file.", L"Error", MB_OK | MB_ICONERROR);
+            }
         }
     }
 }

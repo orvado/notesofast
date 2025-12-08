@@ -17,6 +17,22 @@ bool Database::Initialize(const std::string& dbPath) {
     }
     
     if (!CreateSchema()) return false;
+
+    // Migration: Check for is_checklist column
+    const char* checkSql = "SELECT is_checklist FROM notes LIMIT 1";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(m_db, checkSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        // Column likely missing, add it
+        const char* alterSql = "ALTER TABLE notes ADD COLUMN is_checklist INTEGER DEFAULT 0";
+        char* errMsg = nullptr;
+        if (sqlite3_exec(m_db, alterSql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+            std::cerr << "Migration error: " << errMsg << std::endl;
+            sqlite3_free(errMsg);
+        }
+    } else {
+        sqlite3_finalize(stmt);
+    }
+
     return InitializeColors();
 }
 

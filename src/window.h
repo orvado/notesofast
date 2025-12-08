@@ -28,6 +28,7 @@ protected:
     void SaveCurrentNote();
     void CreateNewNote();
     void DeleteCurrentNote();
+    void ExportCurrentNote();
     void TogglePinCurrentNote();
     void ToggleArchiveCurrentNote();
     void SetCurrentNoteColor(int colorId);
@@ -40,6 +41,8 @@ protected:
     void MoveChecklistItemUp();
     void MoveChecklistItemDown();
     void ToggleChecklistItemCheck(int index);
+    void ToggleFormat(DWORD mask, DWORD effect);
+    void UpdateFormatButtons();
 
     HWND m_hwnd;
     HWND m_hwndList;
