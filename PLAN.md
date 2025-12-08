@@ -79,14 +79,14 @@ CREATE TABLE checklist_items (
 
 ## Enhanced Features (Phase 2)
 
-### 5. Color-Coding System
+### 5. Color-Coding System (Completed)
 - **Predefined Color Categories**
   - Personal, Work, Ideas, Important, Shopping (5 default colors)
   - Visual indicator (colored bar/icon) in notes list
   - Filter notes by color category
-  - Color picker dialog for customization
+  - Color picker dialog for customization (Implemented via Context Menu)
 
-### 6. Checklist Support
+### 6. Checklist Support (Pending)
 - **Toggle Note Type**: Text note ↔ Checklist
 - **Checklist Features**
   - Add/remove checklist items
@@ -94,10 +94,24 @@ CREATE TABLE checklist_items (
   - Reorder items (drag-and-drop or up/down buttons)
   - Progress indicator (X/Y items completed)
 
-### 7. Pin to Top
+### 7. Pin to Top (Completed)
 - **Pinned Notes**
   - Pin/unpin button (pushpin icon)
   - Pinned notes always appear at top of list
+
+### 8. Archive Functionality (Completed)
+- **Archive Notes**
+  - Archive/Unarchive button
+  - Hide archived notes from main list by default
+  - "Show Archived" toggle in toolbar
+
+### 9. Sort Options (Completed)
+- **Sort Criteria**
+  - Date Modified (Default)
+  - Date Created
+  - Title (A-Z)
+- **Sort Menu**
+  - Accessible via Toolbar
   - Visual indicator for pinned status
 
 ### 8. Archive Functionality
