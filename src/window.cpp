@@ -100,7 +100,21 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_NOTIFY:
         return OnNotify(wParam, lParam);
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE) {
+            SaveCurrentNote();
+            UnregisterHotkeys();
+        } else {
+            RegisterHotkeys();
+        }
+        return 0;
+    case WM_CLOSE:
+        SaveCurrentNote();
+        DestroyWindow(m_hwnd);
+        return 0;
     case WM_DESTROY:
+        SaveCurrentNote();
+        UnregisterHotkeys();
         PostQuitMessage(0);
         return 0;
     case WM_LBUTTONDOWN:
@@ -215,16 +229,6 @@ void MainWindow::OnCreate() {
     SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_STD_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
     SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_VIEW_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
     
-    // Register Hotkeys
-    RegisterHotKey(m_hwnd, 1, MOD_CONTROL, 'N'); // New
-    RegisterHotKey(m_hwnd, 2, MOD_CONTROL, 'S'); // Save
-    RegisterHotKey(m_hwnd, 3, MOD_CONTROL, 'D'); // Delete
-    RegisterHotKey(m_hwnd, 4, MOD_CONTROL, 'P'); // Pin
-    RegisterHotKey(m_hwnd, 5, MOD_CONTROL, 'F'); // Find (Focus Search)
-    RegisterHotKey(m_hwnd, 6, MOD_CONTROL, 'B'); // Bold
-    RegisterHotKey(m_hwnd, 7, MOD_CONTROL, 'I'); // Italic
-    RegisterHotKey(m_hwnd, 8, MOD_CONTROL, 'U'); // Underline
-
     TBBUTTON tbb[8];
     ZeroMemory(tbb, sizeof(tbb));
     
@@ -668,6 +672,52 @@ void MainWindow::OnMouseMove(int x, int y) {
     }
 }
 
+void MainWindow::RegisterHotkeys() {
+    if (m_hotkeysRegistered || !m_hwnd) {
+        return;
+    }
+
+    struct Hotkey { int id; UINT modifiers; UINT key; };
+    const Hotkey hotkeys[] = {
+        {1, MOD_CONTROL, 'N'},
+        {2, MOD_CONTROL, 'S'},
+        {3, MOD_CONTROL, 'D'},
+        {4, MOD_CONTROL, 'P'},
+        {5, MOD_CONTROL, 'F'},
+        {6, MOD_CONTROL, 'B'},
+        {7, MOD_CONTROL, 'I'},
+        {8, MOD_CONTROL, 'U'}
+    };
+
+    bool success = true;
+    for (const auto& hk : hotkeys) {
+        if (!RegisterHotKey(m_hwnd, hk.id, hk.modifiers, hk.key)) {
+            success = false;
+            break;
+        }
+    }
+
+    if (success) {
+        m_hotkeysRegistered = true;
+    } else {
+        for (const auto& hk : hotkeys) {
+            UnregisterHotKey(m_hwnd, hk.id);
+        }
+    }
+}
+
+void MainWindow::UnregisterHotkeys() {
+    if (!m_hotkeysRegistered || !m_hwnd) {
+        return;
+    }
+
+    for (int id = 1; id <= 8; ++id) {
+        UnregisterHotKey(m_hwnd, id);
+    }
+
+    m_hotkeysRegistered = false;
+}
+
 void MainWindow::LoadNotesList(const std::wstring& filter) {
     ListView_DeleteAllItems(m_hwndList);
     m_notes = m_db->GetAllNotes(m_showArchived, m_sortBy);
@@ -712,6 +762,14 @@ void MainWindow::LoadNotesList(const std::wstring& filter) {
             m_filteredIndices.push_back((int)i);
             listIndex++;
         }
+    }
+    
+    // Auto-select first note if available
+    if (listIndex > 0) {
+        ListView_SetItemState(m_hwndList, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        LoadNoteContent(0);
+    } else {
+        LoadNoteContent(-1);
     }
 }
 

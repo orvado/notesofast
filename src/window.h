@@ -25,6 +25,8 @@ protected:
     void OnLButtonDown(int x, int y);
     void OnLButtonUp(int x, int y);
     void OnMouseMove(int x, int y);
+    void RegisterHotkeys();
+    void UnregisterHotkeys();
 
     void LoadNotesList(const std::wstring& filter = L"");
     void LoadNoteContent(int index);
@@ -75,4 +77,5 @@ protected:
     static const int SPLITTER_WIDTH = 5;
     
     HFONT m_hFont = NULL;
+    bool m_hotkeysRegistered = false;
 };
