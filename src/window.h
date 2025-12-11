@@ -37,6 +37,7 @@ protected:
     void CreateNewNote();
     void DeleteCurrentNote();
     void ExportCurrentNote();
+    void PrintCurrentNote();
     void TogglePinCurrentNote();
     void ToggleArchiveCurrentNote();
     void SetCurrentNoteColor(int colorId);

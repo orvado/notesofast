@@ -32,6 +32,7 @@
 #define IDM_FORMAT_ITALIC 402
 #define IDM_FORMAT_UNDERLINE 403
 #define IDM_EXPORT_TXT 501
+#define IDM_PRINT 503
 #define IDM_HIST_BACK 601
 #define IDM_HIST_FORWARD 602
 #define IDM_SEARCH_MODE_TOGGLE 502
@@ -259,7 +260,7 @@ void MainWindow::OnCreate() {
     SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_VIEW_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
     SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_HIST_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
 
-    TBBUTTON tbb[11];
+    TBBUTTON tbb[12];
     ZeroMemory(tbb, sizeof(tbb));
 
     tbb[0].iBitmap = 15 + 12 + HIST_BACK;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
@@ -304,31 +305,37 @@ void MainWindow::OnCreate() {
     tbb[6].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[6].iString = (INT_PTR)L"T+C";
 
-    tbb[7].iBitmap = 15 + 12 + HIST_FAVORITES;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
-    tbb[7].idCommand = IDM_PIN;
+    tbb[7].iBitmap = STD_PRINT;
+    tbb[7].idCommand = IDM_PRINT;
     tbb[7].fsState = TBSTATE_ENABLED;
-    tbb[7].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[7].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[7].iString = 0;
 
-    tbb[8].iBitmap = STD_FILEOPEN; // Using File Open (folder) for Archive
-    tbb[8].idCommand = IDM_ARCHIVE;
+    tbb[8].iBitmap = 15 + 12 + HIST_FAVORITES;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
+    tbb[8].idCommand = IDM_PIN;
     tbb[8].fsState = TBSTATE_ENABLED;
     tbb[8].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[8].iString = 0;
 
-    tbb[9].iBitmap = 15 + 8; // VIEW_PARENTFOLDER (15 is offset for second image list)
-    tbb[9].idCommand = IDM_SHOW_ARCHIVED;
+    tbb[9].iBitmap = STD_FILEOPEN; // Using File Open (folder) for Archive
+    tbb[9].idCommand = IDM_ARCHIVE;
     tbb[9].fsState = TBSTATE_ENABLED;
     tbb[9].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[9].iString = 0;
 
-    tbb[10].iBitmap = 15 + 2; // VIEW_LIST
-    tbb[10].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[10].iBitmap = 15 + 8; // VIEW_PARENTFOLDER (15 is offset for second image list)
+    tbb[10].idCommand = IDM_SHOW_ARCHIVED;
     tbb[10].fsState = TBSTATE_ENABLED;
     tbb[10].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[10].iString = 0;
 
-    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 11, (LPARAM)&tbb);
+    tbb[11].iBitmap = 15 + 2; // VIEW_LIST
+    tbb[11].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[11].fsState = TBSTATE_ENABLED;
+    tbb[11].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[11].iString = 0;
+
+    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 12, (LPARAM)&tbb);
     
     // Add Separator
     TBBUTTON tbbSep;
@@ -464,6 +471,9 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_SAVE:
         ExportCurrentNote();
         break;
+    case IDM_PRINT:
+        PrintCurrentNote();
+        break;
     case IDM_DELETE:
         DeleteCurrentNote();
         break;
@@ -585,6 +595,7 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
         switch (pInfo->hdr.idFrom) {
             case IDM_NEW: wcscpy_s(pInfo->szText, L"New Note (Ctrl+N)"); break;
             case IDM_SAVE: wcscpy_s(pInfo->szText, L"Export to Text (Ctrl+S)"); break;
+            case IDM_PRINT: wcscpy_s(pInfo->szText, L"Print Note"); break;
             case IDM_DELETE: wcscpy_s(pInfo->szText, L"Delete (Ctrl+D)"); break;
             case IDM_PIN: wcscpy_s(pInfo->szText, L"Pin Note (Ctrl+P)"); break;
             case IDM_ARCHIVE: wcscpy_s(pInfo->szText, L"Archive Note"); break;
@@ -1407,6 +1418,87 @@ void MainWindow::ExportCurrentNote() {
                 MessageBox(m_hwnd, L"Failed to save file.", L"Error", MB_OK | MB_ICONERROR);
             }
         }
+    }
+}
+
+void MainWindow::PrintCurrentNote() {
+    if (m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size()) {
+        const Note& note = m_notes[m_currentNoteIndex];
+        
+        // Prepare content to print
+        std::string content;
+        if (note.is_checklist) {
+            content = note.title + "\n\n";
+            for (const auto& item : note.checklist_items) {
+                content += (item.is_checked ? "[x] " : "[ ] ") + item.item_text + "\n";
+            }
+        } else {
+            content = note.content;
+        }
+        
+        std::wstring wContent = Utils::Utf8ToWide(content);
+        
+        // Show print dialog
+        PRINTDLG pd;
+        ZeroMemory(&pd, sizeof(pd));
+        pd.lStructSize = sizeof(pd);
+        pd.hwndOwner = m_hwnd;
+        pd.Flags = PD_RETURNDC | PD_NOSELECTION;
+        
+        if (PrintDlg(&pd) == TRUE) {
+            HDC hPrinterDC = pd.hDC;
+            
+            // Start print job
+            DOCINFO di;
+            ZeroMemory(&di, sizeof(di));
+            di.cbSize = sizeof(di);
+            std::wstring wTitle = Utils::Utf8ToWide(note.title);
+            di.lpszDocName = wTitle.c_str();
+            
+            if (StartDoc(hPrinterDC, &di) > 0) {
+                if (StartPage(hPrinterDC) > 0) {
+                    // Get printer capabilities
+                    int pageWidth = GetDeviceCaps(hPrinterDC, HORZRES);
+                    int pageHeight = GetDeviceCaps(hPrinterDC, VERTRES);
+                    int margin = 100; // Margin in device units
+                    
+                    // Create font for printing
+                    int fontHeight = -MulDiv(10, GetDeviceCaps(hPrinterDC, LOGPIXELSY), 72);
+                    HFONT hPrintFont = CreateFont(fontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                        ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                        DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
+                    
+                    HFONT hOldFont = (HFONT)SelectObject(hPrinterDC, hPrintFont);
+                    
+                    // Get line height
+                    TEXTMETRIC tm;
+                    GetTextMetrics(hPrinterDC, &tm);
+                    int lineHeight = tm.tmHeight + tm.tmExternalLeading;
+                    
+                    // Draw text line by line
+                    RECT rcPrint;
+                    rcPrint.left = margin;
+                    rcPrint.top = margin;
+                    rcPrint.right = pageWidth - margin;
+                    rcPrint.bottom = pageHeight - margin;
+                    
+                    // Use DrawText with word wrapping
+                    DrawText(hPrinterDC, wContent.c_str(), -1, &rcPrint,
+                        DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+                    
+                    SelectObject(hPrinterDC, hOldFont);
+                    DeleteObject(hPrintFont);
+                    
+                    EndPage(hPrinterDC);
+                }
+                EndDoc(hPrinterDC);
+            }
+            
+            DeleteDC(hPrinterDC);
+        }
+        
+        if (pd.hDevMode) GlobalFree(pd.hDevMode);
+        if (pd.hDevNames) GlobalFree(pd.hDevNames);
     }
 }
 
