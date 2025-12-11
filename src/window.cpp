@@ -8,6 +8,7 @@
 #define ID_TOOLBAR 3
 #define ID_STATUS 4
 #define ID_SEARCH 5
+#define ID_SEARCH_MODE_TOGGLE 12
 #define ID_CHECKLIST_LIST 6
 #define ID_CHECKLIST_EDIT 7
 #define ID_ADD_ITEM 8
@@ -31,6 +32,9 @@
 #define IDM_FORMAT_ITALIC 402
 #define IDM_FORMAT_UNDERLINE 403
 #define IDM_EXPORT_TXT 501
+#define IDM_HIST_BACK 601
+#define IDM_HIST_FORWARD 602
+#define IDM_SEARCH_MODE_TOGGLE 502
 
 WNDPROC g_oldEditProc = NULL;
 
@@ -228,59 +232,78 @@ void MainWindow::OnCreate() {
     // Load Standard Images
     SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_STD_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
     SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_VIEW_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
-    
-    TBBUTTON tbb[8];
+    SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_HIST_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
+
+    TBBUTTON tbb[11];
     ZeroMemory(tbb, sizeof(tbb));
-    
-    tbb[0].iBitmap = STD_FILENEW;
-    tbb[0].idCommand = IDM_NEW;
+
+    tbb[0].iBitmap = 15 + 12 + HIST_BACK;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
+    tbb[0].idCommand = IDM_HIST_BACK;
     tbb[0].fsState = TBSTATE_ENABLED;
     tbb[0].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[0].iString = 0;
 
-    tbb[1].iBitmap = STD_FILESAVE;
-    tbb[1].idCommand = IDM_SAVE;
+    tbb[1].iBitmap = 15 + 12 + HIST_FORWARD;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
+    tbb[1].idCommand = IDM_HIST_FORWARD;
     tbb[1].fsState = TBSTATE_ENABLED;
     tbb[1].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[1].iString = 0;
 
-    tbb[2].iBitmap = STD_DELETE;
-    tbb[2].idCommand = IDM_DELETE;
+    tbb[2].iBitmap = STD_FILENEW;
+    tbb[2].idCommand = IDM_NEW;
     tbb[2].fsState = TBSTATE_ENABLED;
     tbb[2].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[2].iString = 0;
 
-    tbb[3].iBitmap = STD_PRINT; // Using Print icon for Export
-    tbb[3].idCommand = IDM_EXPORT_TXT;
+    tbb[3].iBitmap = STD_FILESAVE;
+    tbb[3].idCommand = IDM_SAVE;
     tbb[3].fsState = TBSTATE_ENABLED;
     tbb[3].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[3].iString = 0;
 
-    tbb[4].iBitmap = STD_PROPERTIES; // Using Properties for Pin
-    tbb[4].idCommand = IDM_PIN;
+    tbb[4].iBitmap = STD_DELETE;
+    tbb[4].idCommand = IDM_DELETE;
     tbb[4].fsState = TBSTATE_ENABLED;
-    tbb[4].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[4].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[4].iString = 0;
 
-    tbb[5].iBitmap = STD_FILEOPEN; // Using File Open (folder) for Archive
-    tbb[5].idCommand = IDM_ARCHIVE;
+    tbb[5].iBitmap = 15 + 6; // VIEW_SORTDATE
+    tbb[5].idCommand = IDM_SORT;
     tbb[5].fsState = TBSTATE_ENABLED;
-    tbb[5].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[5].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[5].iString = 0;
 
-    tbb[6].iBitmap = 15 + 8; // VIEW_PARENTFOLDER (15 is offset for second image list)
-    tbb[6].idCommand = IDM_SHOW_ARCHIVED;
+    tbb[6].iBitmap = I_IMAGENONE;
+    tbb[6].idCommand = IDM_SEARCH_MODE_TOGGLE;
     tbb[6].fsState = TBSTATE_ENABLED;
     tbb[6].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[6].iString = 0;
+    tbb[6].iString = (INT_PTR)L"T+C";
 
-    tbb[7].iBitmap = 15 + 2; // VIEW_LIST
-    tbb[7].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[7].iBitmap = 15 + 12 + HIST_FAVORITES;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
+    tbb[7].idCommand = IDM_PIN;
     tbb[7].fsState = TBSTATE_ENABLED;
     tbb[7].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[7].iString = 0;
 
-    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 8, (LPARAM)&tbb);
+    tbb[8].iBitmap = STD_FILEOPEN; // Using File Open (folder) for Archive
+    tbb[8].idCommand = IDM_ARCHIVE;
+    tbb[8].fsState = TBSTATE_ENABLED;
+    tbb[8].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[8].iString = 0;
+
+    tbb[9].iBitmap = 15 + 8; // VIEW_PARENTFOLDER (15 is offset for second image list)
+    tbb[9].idCommand = IDM_SHOW_ARCHIVED;
+    tbb[9].fsState = TBSTATE_ENABLED;
+    tbb[9].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[9].iString = 0;
+
+    tbb[10].iBitmap = 15 + 2; // VIEW_LIST
+    tbb[10].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[10].fsState = TBSTATE_ENABLED;
+    tbb[10].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[10].iString = 0;
+
+    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 11, (LPARAM)&tbb);
     
     // Add Separator
     TBBUTTON tbbSep;
@@ -311,16 +334,6 @@ void MainWindow::OnCreate() {
     tbbFormat[2].iString = (INT_PTR)L"U";
 
     SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 3, (LPARAM)&tbbFormat);
-
-    // Add Sort Button
-    TBBUTTON tbbSort;
-    ZeroMemory(&tbbSort, sizeof(tbbSort));
-    tbbSort.iBitmap = 15 + 6; // VIEW_SORTDATE
-    tbbSort.idCommand = IDM_SORT;
-    tbbSort.fsState = TBSTATE_ENABLED;
-    tbbSort.fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbbSort.iString = 0;
-    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 1, (LPARAM)&tbbSort);
 
     // Create Checklist Controls (initially hidden)
     m_hwndChecklistList = CreateWindow(WC_LISTVIEW, L"", 
@@ -424,13 +437,10 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         CreateNewNote();
         break;
     case IDM_SAVE:
-        SaveCurrentNote();
+        ExportCurrentNote();
         break;
     case IDM_DELETE:
         DeleteCurrentNote();
-        break;
-    case IDM_EXPORT_TXT:
-        ExportCurrentNote();
         break;
     case IDM_PIN:
         TogglePinCurrentNote();
@@ -492,6 +502,15 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_FORMAT_UNDERLINE:
         ToggleFormat(CFM_UNDERLINE, CFE_UNDERLINE);
         break;
+    case IDM_SEARCH_MODE_TOGGLE:
+        ToggleSearchMode();
+        break;
+    case IDM_HIST_BACK:
+        NavigateHistory(-1);
+        break;
+    case IDM_HIST_FORWARD:
+        NavigateHistory(1);
+        break;
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
             m_isDirty = true;
@@ -502,7 +521,8 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
             int len = GetWindowTextLength(m_hwndSearch);
             std::vector<wchar_t> buf(len + 1);
             GetWindowText(m_hwndSearch, &buf[0], len + 1);
-            LoadNotesList(&buf[0]);
+            bool autoSelect = !m_isNewNote; // avoid pulling focus to list while composing a new note
+            LoadNotesList(&buf[0], m_searchTitleOnly, autoSelect);
         }
         break;
     }
@@ -521,9 +541,8 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
         pInfo->hinst = NULL;
         switch (pInfo->hdr.idFrom) {
             case IDM_NEW: wcscpy_s(pInfo->szText, L"New Note (Ctrl+N)"); break;
-            case IDM_SAVE: wcscpy_s(pInfo->szText, L"Save (Ctrl+S)"); break;
+            case IDM_SAVE: wcscpy_s(pInfo->szText, L"Export to Text (Ctrl+S)"); break;
             case IDM_DELETE: wcscpy_s(pInfo->szText, L"Delete (Ctrl+D)"); break;
-            case IDM_EXPORT_TXT: wcscpy_s(pInfo->szText, L"Export to Text"); break;
             case IDM_PIN: wcscpy_s(pInfo->szText, L"Pin Note (Ctrl+P)"); break;
             case IDM_ARCHIVE: wcscpy_s(pInfo->szText, L"Archive Note"); break;
             case IDM_SHOW_ARCHIVED: wcscpy_s(pInfo->szText, L"Show Archived Notes"); break;
@@ -532,6 +551,9 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             case IDM_FORMAT_ITALIC: wcscpy_s(pInfo->szText, L"Italic (Ctrl+I)"); break;
             case IDM_FORMAT_UNDERLINE: wcscpy_s(pInfo->szText, L"Underline (Ctrl+U)"); break;
             case IDM_SORT: wcscpy_s(pInfo->szText, L"Sort Notes"); break;
+            case IDM_HIST_BACK: wcscpy_s(pInfo->szText, L"Back in history"); break;
+            case IDM_HIST_FORWARD: wcscpy_s(pInfo->szText, L"Forward in history"); break;
+            case IDM_SEARCH_MODE_TOGGLE: wcscpy_s(pInfo->szText, L"Search Title and Content"); break;
         }
         return 0;
     }
@@ -567,8 +589,36 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
         if (pnmh->code == LVN_ITEMCHANGED) {
             LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
             if ((pnmv->uChanged & LVIF_STATE) && (pnmv->uNewState & LVIS_SELECTED)) {
-                SaveCurrentNote(); // Auto-save previous note
-                LoadNoteContent(pnmv->iItem);
+                int targetNoteId = -1;
+                if (pnmv->iItem >= 0 && pnmv->iItem < (int)m_filteredIndices.size()) {
+                    int realIndex = m_filteredIndices[pnmv->iItem];
+                    if (realIndex >= 0 && realIndex < (int)m_notes.size()) {
+                        targetNoteId = m_notes[realIndex].id;
+                    }
+                }
+
+                if (!PromptToSaveIfDirty(targetNoteId, false)) {
+                    // Revert selection change
+                    ListView_SetItemState(m_hwndList, pnmv->iItem, 0, LVIS_SELECTED | LVIS_FOCUSED);
+                    if (m_currentNoteIndex >= 0) {
+                        for (int i = 0; i < (int)m_filteredIndices.size(); ++i) {
+                            if (m_filteredIndices[i] == m_currentNoteIndex) {
+                                ListView_SetItemState(m_hwndList, i, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                                break;
+                            }
+                        }
+                    }
+                    return 0;
+                }
+                SaveCurrentNote(targetNoteId, false); // Auto-save previous note
+
+                int listIndex = (targetNoteId != -1) ? FindListIndexByNoteId(targetNoteId) : pnmv->iItem;
+                if (listIndex != -1) {
+                    ListView_SetItemState(m_hwndList, listIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                    LoadNoteContent(listIndex);
+                } else {
+                    LoadNoteContent(-1);
+                }
             }
         } else if (pnmh->code == NM_CUSTOMDRAW) {
             LPNMLVCUSTOMDRAW lplvcd = (LPNMLVCUSTOMDRAW)lParam;
@@ -718,10 +768,11 @@ void MainWindow::UnregisterHotkeys() {
     m_hotkeysRegistered = false;
 }
 
-void MainWindow::LoadNotesList(const std::wstring& filter) {
+void MainWindow::LoadNotesList(const std::wstring& filter, bool titleOnly, bool autoSelectFirst, int selectNoteId) {
     ListView_DeleteAllItems(m_hwndList);
     m_notes = m_db->GetAllNotes(m_showArchived, m_sortBy);
     m_filteredIndices.clear();
+    m_currentSearchFilter = filter;
     
     LVITEM lvi;
     lvi.mask = LVIF_TEXT | LVIF_PARAM;
@@ -747,9 +798,17 @@ void MainWindow::LoadNotesList(const std::wstring& filter) {
             for (auto& c : wContentLower) c = towlower(c);
             for (auto& c : filterLower) c = towlower(c);
             
-            if (wTitleLower.find(filterLower) == std::wstring::npos && 
-                wContentLower.find(filterLower) == std::wstring::npos) {
-                match = false;
+            if (titleOnly) {
+                // Title only search
+                if (wTitleLower.find(filterLower) == std::wstring::npos) {
+                    match = false;
+                }
+            } else {
+                // Title and content search
+                if (wTitleLower.find(filterLower) == std::wstring::npos && 
+                    wContentLower.find(filterLower) == std::wstring::npos) {
+                    match = false;
+                }
             }
         }
         
@@ -764,18 +823,37 @@ void MainWindow::LoadNotesList(const std::wstring& filter) {
         }
     }
     
-    // Auto-select first note if available
-    if (listIndex > 0) {
-        ListView_SetItemState(m_hwndList, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-        LoadNoteContent(0);
-    } else {
-        LoadNoteContent(-1);
+    int targetListIndex = -1;
+    if (selectNoteId != -1) {
+        for (int i = 0; i < listIndex; ++i) {
+            int realIndex = m_filteredIndices[i];
+            if (m_notes[realIndex].id == selectNoteId) {
+                targetListIndex = i;
+                break;
+            }
+        }
+    }
+
+    // Avoid auto-selecting another note while composing a new unsaved note,
+    // but still honor explicit target selections (e.g., after saving or navigation).
+    bool shouldSelect = (targetListIndex != -1) || (autoSelectFirst && !m_isNewNote);
+    if (shouldSelect) {
+        if (targetListIndex != -1) {
+            ListView_SetItemState(m_hwndList, targetListIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            LoadNoteContent(targetListIndex);
+        } else if (listIndex > 0) {
+            ListView_SetItemState(m_hwndList, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            LoadNoteContent(0);
+        } else {
+            LoadNoteContent(-1);
+        }
     }
 }
 
 void MainWindow::LoadNoteContent(int listIndex) {
     if (listIndex >= 0 && listIndex < (int)m_filteredIndices.size()) {
         int realIndex = m_filteredIndices[listIndex];
+        m_isNewNote = false;
         m_currentNoteIndex = realIndex;
         std::wstring wContent = Utils::Utf8ToWide(m_notes[realIndex].content);
         SetWindowText(m_hwndEdit, wContent.c_str());
@@ -795,10 +873,15 @@ void MainWindow::LoadNoteContent(int listIndex) {
         }
         
         UpdateChecklistUI();
+
+        if (!m_navigatingHistory) {
+            RecordHistory(realIndex);
+        }
     } else {
         m_currentNoteIndex = -1;
         SetWindowText(m_hwndEdit, L"");
         m_isDirty = false;
+        m_isNewNote = false;
         m_checklistMode = false;
         
         SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_PIN, FALSE);
@@ -808,7 +891,43 @@ void MainWindow::LoadNoteContent(int listIndex) {
     }
 }
 
-void MainWindow::SaveCurrentNote() {
+void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfterSave) {
+    if (m_isNewNote) {
+        if (!m_isDirty) {
+            return;
+        }
+
+        int len = GetWindowTextLength(m_hwndEdit);
+        std::vector<wchar_t> buf(len + 1);
+        GetWindowText(m_hwndEdit, &buf[0], len + 1);
+        std::string content = Utils::WideToUtf8(&buf[0]);
+
+        // Derive title from first line
+        size_t firstLineEnd = content.find('\n');
+        std::string newTitle = (firstLineEnd == std::string::npos) ? content : content.substr(0, firstLineEnd);
+        if (!newTitle.empty() && newTitle.back() == '\r') {
+            newTitle.pop_back();
+        }
+        if (newTitle.empty()) {
+            newTitle = "Untitled Note";
+        }
+        if (newTitle.length() > 50) {
+            newTitle = newTitle.substr(0, 50) + "...";
+        }
+
+        Note newNote;
+        newNote.title = newTitle;
+        newNote.content = content;
+
+        if (m_db->CreateNote(newNote)) {
+            m_isDirty = false;
+            m_isNewNote = false;
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Note saved");
+            LoadNotesList(m_currentSearchFilter, m_searchTitleOnly, autoSelectAfterSave, preferredSelectNoteId == -1 ? newNote.id : preferredSelectNoteId);
+        }
+        return;
+    }
+
     if (m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size() && m_isDirty) {
         int len = GetWindowTextLength(m_hwndEdit);
         std::vector<wchar_t> buf(len + 1);
@@ -858,35 +977,61 @@ void MainWindow::SaveCurrentNote() {
 
 void MainWindow::CreateNewNote() {
     SaveCurrentNote();
-    
-    Note newNote;
-    newNote.title = "New Note";
-    newNote.content = "";
-    
-    if (m_db->CreateNote(newNote)) {
-        SetWindowText(m_hwndSearch, L""); // Clear search to show new note
-        LoadNotesList();
-        
-        // Find the new note in the list
-        for (int i = 0; i < (int)m_filteredIndices.size(); ++i) {
-            int realIndex = m_filteredIndices[i];
-            if (m_notes[realIndex].id == newNote.id) {
-                ListView_SetItemState(m_hwndList, i, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                LoadNoteContent(i);
-                break;
-            }
-        }
-        SetFocus(m_hwndEdit);
-    }
+
+    m_isNewNote = true;
+    m_currentNoteIndex = -1;
+    m_isDirty = false;
+    m_checklistMode = false;
+
+    // Clear selection and editor
+    ListView_SetItemState(m_hwndList, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    SetWindowText(m_hwndEdit, L"");
+    SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_PIN, FALSE);
+    SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_ARCHIVE, FALSE);
+    SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_TOGGLE_CHECKLIST, FALSE);
+    UpdateChecklistUI();
+
+    // Clear search so user sees full list once saved later
+    SetWindowText(m_hwndSearch, L"");
+    SetFocus(m_hwndEdit);
 }
 
 void MainWindow::DeleteCurrentNote() {
     if (m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size()) {
         if (MessageBox(m_hwnd, L"Are you sure you want to delete this note?", L"Confirm Delete", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-            m_db->DeleteNote(m_notes[m_currentNoteIndex].id);
-            LoadNotesList(); // This will clear selection
-            m_currentNoteIndex = -1;
-            SetWindowText(m_hwndEdit, L"");
+            int deletedNoteId = m_notes[m_currentNoteIndex].id;
+            m_db->DeleteNote(deletedNoteId);
+            
+            // Try to navigate to previous note in history
+            int targetNoteId = -1;
+            if (m_historyPos > 0) {
+                // Look backward in history for a valid note (not the deleted one)
+                for (int i = m_historyPos - 1; i >= 0; --i) {
+                    int histNoteIndex = m_history[i];
+                    if (histNoteIndex >= 0 && histNoteIndex < (int)m_notes.size() && 
+                        m_notes[histNoteIndex].id != deletedNoteId) {
+                        targetNoteId = m_notes[histNoteIndex].id;
+                        m_historyPos = i;
+                        break;
+                    }
+                }
+            }
+            
+            LoadNotesList(m_currentSearchFilter, m_searchTitleOnly, true, targetNoteId);
+            
+            // If no note selected (e.g., list is empty), disable editor
+            if (ListView_GetSelectedCount(m_hwndList) == 0) {
+                m_currentNoteIndex = -1;
+                SetWindowText(m_hwndEdit, L"");
+                m_isDirty = false;
+                m_isNewNote = false;
+                EnableWindow(m_hwndEdit, FALSE);
+                SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_PIN, FALSE);
+                SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_ARCHIVE, FALSE);
+                SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_TOGGLE_CHECKLIST, FALSE);
+            } else {
+                EnableWindow(m_hwndEdit, TRUE);
+            }
         }
     }
 }
@@ -1213,4 +1358,114 @@ void MainWindow::ExportCurrentNote() {
             }
         }
     }
+}
+
+void MainWindow::ToggleSearchMode() {
+    m_searchTitleOnly = !m_searchTitleOnly;
+    
+    // Update toolbar button state
+    SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_SEARCH_MODE_TOGGLE, m_searchTitleOnly ? FALSE : TRUE);
+    
+    // Re-apply current search with new mode
+    LoadNotesList(m_currentSearchFilter, m_searchTitleOnly);
+    
+    // Show notification
+    const wchar_t* mode = m_searchTitleOnly ? L"Title only" : L"Title + Content";
+    SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)(L"Search mode: " + std::wstring(mode)).c_str());
+}
+
+bool MainWindow::PromptToSaveIfDirty(int preferredSelectNoteId, bool autoSelectAfterSave) {
+    if (!m_isDirty) {
+        return true;
+    }
+
+    if (m_isNewNote) {
+        SaveCurrentNote(preferredSelectNoteId, autoSelectAfterSave);
+        return true;
+    }
+
+    int res = MessageBox(m_hwnd, L"You have unsaved changes. Save them?", L"Unsaved Changes", MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (res == IDCANCEL) {
+        return false;
+    }
+    if (res == IDYES) {
+        SaveCurrentNote(preferredSelectNoteId, autoSelectAfterSave);
+        return true;
+    }
+    // Discard
+    m_isDirty = false;
+    return true;
+}
+
+void MainWindow::RecordHistory(int noteIndex) {
+    if (noteIndex < 0) {
+        UpdateHistoryButtons();
+        return;
+    }
+
+    // If we navigated back in history and then choose a new note, drop forward history
+    if (m_historyPos + 1 < (int)m_history.size()) {
+        m_history.erase(m_history.begin() + m_historyPos + 1, m_history.end());
+    }
+
+    if (!m_history.empty() && m_history.back() == noteIndex) {
+        UpdateHistoryButtons();
+        return;
+    }
+
+    m_history.push_back(noteIndex);
+    m_historyPos = (int)m_history.size() - 1;
+    UpdateHistoryButtons();
+}
+
+void MainWindow::NavigateHistory(int offset) {
+    int newPos = m_historyPos + offset;
+    if (newPos < 0 || newPos >= (int)m_history.size()) {
+        UpdateHistoryButtons();
+        return;
+    }
+
+    int targetNoteIndex = m_history[newPos];
+
+    if (!PromptToSaveIfDirty(targetNoteIndex >= 0 && targetNoteIndex < (int)m_notes.size() ? m_notes[targetNoteIndex].id : -1, false)) {
+        return;
+    }
+
+    // Find the visible list index for this note
+    int listIndex = -1;
+    if (targetNoteIndex >= 0 && targetNoteIndex < (int)m_notes.size()) {
+        listIndex = FindListIndexByNoteId(m_notes[targetNoteIndex].id);
+    }
+
+    if (listIndex == -1) {
+        // Note not visible under current filter; do nothing but update buttons
+        UpdateHistoryButtons();
+        return;
+    }
+
+    m_navigatingHistory = true;
+    m_historyPos = newPos;
+    ListView_SetItemState(m_hwndList, listIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    LoadNoteContent(listIndex);
+    m_navigatingHistory = false;
+    UpdateHistoryButtons();
+}
+
+int MainWindow::FindListIndexByNoteId(int noteId) {
+    for (int i = 0; i < (int)m_filteredIndices.size(); ++i) {
+        int realIndex = m_filteredIndices[i];
+        if (realIndex >= 0 && realIndex < (int)m_notes.size()) {
+            if (m_notes[realIndex].id == noteId) {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+void MainWindow::UpdateHistoryButtons() {
+    bool canBack = m_historyPos > 0;
+    bool canForward = m_historyPos >= 0 && m_historyPos + 1 < (int)m_history.size();
+    SendMessage(m_hwndToolbar, TB_ENABLEBUTTON, IDM_HIST_BACK, canBack ? TRUE : FALSE);
+    SendMessage(m_hwndToolbar, TB_ENABLEBUTTON, IDM_HIST_FORWARD, canForward ? TRUE : FALSE);
 }

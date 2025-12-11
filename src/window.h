@@ -28,9 +28,9 @@ protected:
     void RegisterHotkeys();
     void UnregisterHotkeys();
 
-    void LoadNotesList(const std::wstring& filter = L"");
+    void LoadNotesList(const std::wstring& filter = L"", bool titleOnly = false, bool autoSelectFirst = true, int selectNoteId = -1);
     void LoadNoteContent(int index);
-    void SaveCurrentNote();
+    void SaveCurrentNote(int preferredSelectNoteId = -1, bool autoSelectAfterSave = true);
     void CreateNewNote();
     void DeleteCurrentNote();
     void ExportCurrentNote();
@@ -48,6 +48,12 @@ protected:
     void ToggleChecklistItemCheck(int index);
     void ToggleFormat(DWORD mask, DWORD effect);
     void UpdateFormatButtons();
+    void ToggleSearchMode();
+    bool PromptToSaveIfDirty(int preferredSelectNoteId = -1, bool autoSelectAfterSave = true);
+    void RecordHistory(int noteIndex);
+    void NavigateHistory(int offset);
+    void UpdateHistoryButtons();
+    int FindListIndexByNoteId(int noteId);
 
     HWND m_hwnd;
     HWND m_hwndList;
@@ -78,4 +84,10 @@ protected:
     
     HFONT m_hFont = NULL;
     bool m_hotkeysRegistered = false;
+    bool m_searchTitleOnly = false;
+    std::wstring m_currentSearchFilter = L"";
+    std::vector<int> m_history;
+    int m_historyPos = -1;
+    bool m_navigatingHistory = false;
+    bool m_isNewNote = false;
 };
