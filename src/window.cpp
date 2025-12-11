@@ -1,7 +1,9 @@
 #include "window.h"
 #include "utils.h"
+#include "spell_checker.h"
 #include <string>
 #include <algorithm>
+#include <memory>
 
 #define ID_LISTVIEW 1
 #define ID_RICHEDIT 2
@@ -15,6 +17,7 @@
 #define ID_REMOVE_ITEM 9
 #define ID_MOVE_UP 10
 #define ID_MOVE_DOWN 11
+#define ID_SPELLCHECK_TIMER 2001
 
 #define IDM_NEW 101
 #define IDM_SAVE 102
@@ -135,6 +138,9 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             RegisterHotkeys();
         }
         return 0;
+    case WM_TIMER:
+        OnTimer(wParam);
+        return 0;
     case WM_CLOSE:
         SaveCurrentNote();
         DestroyWindow(m_hwnd);
@@ -142,6 +148,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_DESTROY:
         SaveCurrentNote();
         UnregisterHotkeys();
+        KillTimer(m_hwnd, ID_SPELLCHECK_TIMER);
         PostQuitMessage(0);
         return 0;
     case WM_LBUTTONDOWN:
@@ -407,6 +414,20 @@ void MainWindow::OnCreate() {
     // Create Status Bar (Bottom)
     m_hwndStatus = CreateWindowEx(0, STATUSCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, m_hwnd, (HMENU)ID_STATUS, GetModuleHandle(NULL), NULL);
 
+    // Initialize spell checker (hunspell) if dictionaries are present
+    wchar_t modulePath[MAX_PATH] = {0};
+    GetModuleFileName(NULL, modulePath, MAX_PATH);
+    std::wstring exeDir(modulePath);
+    size_t slash = exeDir.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        exeDir = exeDir.substr(0, slash);
+    }
+    std::wstring dictDir = exeDir + L"\\dict\\";
+    std::wstring affPath = dictDir + L"en_US.aff";
+    std::wstring dicPath = dictDir + L"en_US.dic";
+    m_spellChecker = std::make_unique<SpellChecker>();
+    m_spellChecker->Initialize(affPath, dicPath);
+
     LoadNotesList();
 }
 
@@ -548,8 +569,11 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         break;
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
-            m_isDirty = true;
-            UpdateWindowTitle();
+            if (!m_applyingSpellFormat) {
+                m_isDirty = true;
+                UpdateWindowTitle();
+            }
+            ScheduleSpellCheck();
         }
         break;
     case ID_SEARCH:
@@ -933,6 +957,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         }
         
         UpdateWindowTitle();
+        ScheduleSpellCheck();
     } else {
         m_currentNoteIndex = -1;
         SetWindowText(m_hwndEdit, L"");
@@ -945,6 +970,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_TOGGLE_CHECKLIST, FALSE);
         UpdateChecklistUI();
         UpdateWindowTitle();
+        ScheduleSpellCheck();
     }
 }
 
@@ -1055,6 +1081,7 @@ void MainWindow::CreateNewNote() {
     SetWindowText(m_hwndSearch, L"");
     SetFocus(m_hwndEdit);
     UpdateWindowTitle();
+    ScheduleSpellCheck();
 }
 
 void MainWindow::DeleteCurrentNote() {
@@ -1514,6 +1541,125 @@ void MainWindow::ToggleSearchMode() {
     // Show notification
     const wchar_t* mode = m_searchTitleOnly ? L"Title only" : L"Title + Content";
     SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)(L"Search mode: " + std::wstring(mode)).c_str());
+}
+
+void MainWindow::OnTimer(UINT_PTR timerId) {
+    if (timerId == ID_SPELLCHECK_TIMER) {
+        KillTimer(m_hwnd, ID_SPELLCHECK_TIMER);
+        RunSpellCheck();
+    }
+}
+
+void MainWindow::ScheduleSpellCheck() {
+    KillTimer(m_hwnd, ID_SPELLCHECK_TIMER);
+    SetTimer(m_hwnd, ID_SPELLCHECK_TIMER, 400, NULL);
+}
+
+void MainWindow::RunSpellCheck() {
+    if (!m_spellChecker || !m_spellChecker->IsReady()) {
+        return;
+    }
+
+    // Get cursor position to check for active selection
+    CHARRANGE cursorPos = {0};
+    SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&cursorPos);
+    
+    // Pause spell checking if text is selected - don't interfere with user selection
+    if (cursorPos.cpMin != cursorPos.cpMax) {
+        return;
+    }
+    
+    int cursorEnd = cursorPos.cpMax;
+
+    // Use EM_GETTEXTEX to get text in a way that's guaranteed to match RichEdit position semantics
+    GETTEXTEX gtx = {};
+    gtx.flags = GT_DEFAULT;
+    gtx.cb = 1024 * 1024;  // Max size
+    gtx.codepage = 1200;  // Unicode (UTF-16 LE)
+    
+    std::wstring text;
+    text.resize(gtx.cb / sizeof(wchar_t));
+    
+    int actualLen = SendMessage(m_hwndEdit, EM_GETTEXTEX, (WPARAM)&gtx, (LPARAM)&text[0]);
+    if (actualLen > 0) {
+        text.resize(actualLen);
+    } else {
+        text.clear();
+    }
+
+    // Mark that we're applying formatting so EN_CHANGE doesn't set dirty flag
+    m_applyingSpellFormat = true;
+
+    // Clear all underlines and text color formatting
+    CHARFORMAT2 clearFmt;
+    ZeroMemory(&clearFmt, sizeof(clearFmt));
+    clearFmt.cbSize = sizeof(clearFmt);
+    clearFmt.dwMask = CFM_UNDERLINE | CFM_UNDERLINETYPE | CFM_COLOR;
+    clearFmt.dwEffects = 0;
+    clearFmt.bUnderlineType = 0;
+    clearFmt.crTextColor = RGB(0, 0, 0);  // Default black text
+    SendMessage(m_hwndEdit, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&clearFmt);
+
+    auto misses = m_spellChecker->FindMisspellings(text);
+
+    // Filter out words that are incomplete (adjacent to cursor position)
+    // Only underline words that are complete (followed by space/punctuation, not at cursor)
+    std::vector<SpellChecker::Range> filteredMisses;
+    for (const auto& miss : misses) {
+        // Skip if word contains or is adjacent to cursor
+        if (miss.start <= cursorEnd && cursorEnd <= miss.start + miss.length + 1) {
+            continue;  // Don't mark incomplete words being typed
+        }
+        // Also verify the next character after word is a word boundary (space, punctuation, etc.)
+        if (miss.start + miss.length < (LONG)text.size()) {
+            wchar_t nextChar = text[miss.start + miss.length];
+            if (iswalpha(nextChar)) {
+                continue;  // Word not followed by boundary, likely incomplete
+            }
+        }
+        filteredMisses.push_back(miss);
+    }
+
+    // Limit work to keep UI snappy
+    const size_t kMaxMisses = 128;
+    if (filteredMisses.size() > kMaxMisses) {
+        filteredMisses.resize(kMaxMisses);
+    }
+
+    // Store current text state to verify ranges are still valid
+    m_lastCheckedText = text;
+    m_lastMisses = filteredMisses;
+
+    CHARRANGE originalSel = {0};
+    SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&originalSel);
+
+    if (!filteredMisses.empty()) {
+        CHARFORMAT2 missFmt;
+        ZeroMemory(&missFmt, sizeof(missFmt));
+        missFmt.cbSize = sizeof(missFmt);
+        missFmt.dwMask = CFM_UNDERLINE | CFM_COLOR | CFM_UNDERLINETYPE;
+        missFmt.dwEffects = CFE_UNDERLINE;
+        missFmt.crTextColor = RGB(200, 0, 0);
+        missFmt.bUnderlineType = CFU_UNDERLINE;
+
+        for (const auto& r : filteredMisses) {
+            // Validate range bounds to prevent out-of-bounds formatting
+            int textLen = static_cast<int>(text.size());
+            if (r.start < 0 || r.length <= 0 || r.start + r.length > textLen) {
+                continue;
+            }
+            
+            CHARRANGE cr;
+            cr.cpMin = r.start;
+            cr.cpMax = r.start + r.length;
+            SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
+            SendMessage(m_hwndEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&missFmt);
+        }
+    }
+
+    SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&originalSel);
+
+    m_applyingSpellFormat = false;
 }
 
 bool MainWindow::PromptToSaveIfDirty(int preferredSelectNoteId, bool autoSelectAfterSave) {

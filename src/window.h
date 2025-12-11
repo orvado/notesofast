@@ -2,9 +2,11 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <richedit.h>
+#include <memory>
 #include <vector>
 #include "database.h"
 #include "note.h"
+#include "spell_checker.h"
 
 class MainWindow {
 public:
@@ -53,6 +55,9 @@ protected:
     void ToggleFormat(DWORD mask, DWORD effect);
     void UpdateFormatButtons();
     void ToggleSearchMode();
+    void OnTimer(UINT_PTR timerId);
+    void ScheduleSpellCheck();
+    void RunSpellCheck();
     bool PromptToSaveIfDirty(int preferredSelectNoteId = -1, bool autoSelectAfterSave = true);
     void RecordHistory(int noteIndex);
     void NavigateHistory(int offset);
@@ -96,10 +101,16 @@ protected:
     int m_historyPos = -1;
     bool m_navigatingHistory = false;
     bool m_isNewNote = false;
+    bool m_applyingSpellFormat = false;  // Suppress dirty flag during formatting
     
     // Search history
     std::vector<std::string> m_searchHistory;
     int m_searchHistoryPos = -1;
     std::string m_lastSearchTerm;
     DWORD m_lastSearchChangeTime = 0;
+
+    // Spell checking
+    std::unique_ptr<SpellChecker> m_spellChecker;
+    std::vector<SpellChecker::Range> m_lastMisses;
+    std::wstring m_lastCheckedText;  // Store text that was analyzed for spell check
 };

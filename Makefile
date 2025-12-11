@@ -3,6 +3,12 @@ CXXFLAGS = -Wall -std=c++17 -Iinclude -DUNICODE -D_UNICODE
 LDFLAGS = -mwindows -static-libgcc -static-libstdc++
 LIBS = -lcomctl32
 
+# vcpkg (optional) for external deps like hunspell
+VCPKG_ROOT ?= c:/src/vcpkg
+VCPKG_TRIPLET ?= x64-windows
+CXXFLAGS += -I$(VCPKG_ROOT)/installed/$(VCPKG_TRIPLET)/include
+LIBS += -L$(VCPKG_ROOT)/installed/$(VCPKG_TRIPLET)/lib -lhunspell-1.7 -lintl -liconv
+
 SRC_DIR = src
 OBJ_DIR = build
 BIN_DIR = build
@@ -23,6 +29,8 @@ all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CXX) $(OBJS) -o $@ $(LDFLAGS) $(LIBS)
+	@if exist dict\en_US.aff copy /Y dict\en_US.aff $(BIN_DIR) >nul
+	@if exist dict\en_US.dic copy /Y dict\en_US.dic $(BIN_DIR) >nul
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@if not exist $(OBJ_DIR) mkdir $(OBJ_DIR)
