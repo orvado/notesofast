@@ -33,6 +33,24 @@ bool Database::Initialize(const std::string& dbPath) {
         sqlite3_finalize(stmt);
     }
 
+    // Migration: ensure search_history exists for older databases
+    const char* checkSearchSql = "SELECT search_term FROM search_history LIMIT 1";
+    if (sqlite3_prepare_v2(m_db, checkSearchSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        const char* createSearchSql =
+            "CREATE TABLE IF NOT EXISTS search_history ("
+            "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "    search_term TEXT NOT NULL UNIQUE,"
+            "    last_used DATETIME DEFAULT CURRENT_TIMESTAMP"
+            ");";
+        char* errMsg = nullptr;
+        if (sqlite3_exec(m_db, createSearchSql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+            std::cerr << "Migration error (search_history): " << errMsg << std::endl;
+            sqlite3_free(errMsg);
+        }
+    } else {
+        sqlite3_finalize(stmt);
+    }
+
     return InitializeColors();
 }
 
@@ -219,6 +237,11 @@ bool Database::CreateSchema() {
         "    is_checked INTEGER DEFAULT 0,"
         "    item_order INTEGER DEFAULT 0,"
         "    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE"
+        ");"
+        "CREATE TABLE IF NOT EXISTS search_history ("
+        "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "    search_term TEXT NOT NULL UNIQUE,"
+        "    last_used DATETIME DEFAULT CURRENT_TIMESTAMP"
         ");";
 
     char* errMsg = nullptr;
@@ -385,6 +408,60 @@ bool Database::ToggleNoteType(int noteId, bool isChecklist) {
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, isChecklist ? 1 : 0);
         sqlite3_bind_int(stmt, 2, noteId);
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
+std::vector<std::string> Database::GetSearchHistory(int limit) {
+    std::vector<std::string> history;
+    const char* sql = "SELECT search_term FROM search_history ORDER BY last_used DESC LIMIT ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* term = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (term) {
+                history.push_back(term);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    return history;
+}
+
+bool Database::AddSearchHistory(const std::string& searchTerm) {
+    if (searchTerm.empty()) {
+        return false;
+    }
+
+    // Insert or update the search term
+    const char* sql = "INSERT OR REPLACE INTO search_history (search_term, last_used) VALUES (?, CURRENT_TIMESTAMP)";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, searchTerm.c_str(), -1, SQLITE_STATIC);
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        
+        if (success) {
+            ClearOldSearchHistory(128);
+        }
+        return success;
+    }
+    return false;
+}
+
+bool Database::ClearOldSearchHistory(int keepCount) {
+    const char* sql = "DELETE FROM search_history WHERE id NOT IN "
+                      "(SELECT id FROM search_history ORDER BY last_used DESC LIMIT ?)";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, keepCount);
         bool success = (sqlite3_step(stmt) == SQLITE_DONE);
         sqlite3_finalize(stmt);
         return success;

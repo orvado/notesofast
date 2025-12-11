@@ -42,6 +42,11 @@ public:
     bool ToggleChecklistItem(int itemId, bool isChecked);
     bool ReorderChecklistItem(int itemId, int newOrder);
     bool ToggleNoteType(int noteId, bool isChecklist);
+    
+    // Search history methods
+    std::vector<std::string> GetSearchHistory(int limit = 128);
+    bool AddSearchHistory(const std::string& searchTerm);
+    bool ClearOldSearchHistory(int keepCount = 128);
 
 private:
     bool CreateSchema();

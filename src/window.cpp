@@ -37,6 +37,7 @@
 #define IDM_SEARCH_MODE_TOGGLE 502
 
 WNDPROC g_oldEditProc = NULL;
+WNDPROC g_oldSearchProc = NULL;
 
 LRESULT CALLBACK ChecklistEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
@@ -50,8 +51,29 @@ LRESULT CALLBACK ChecklistEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM l
     return CallWindowProc(g_oldEditProc, hwnd, uMsg, wParam, lParam);
 }
 
+LRESULT CALLBACK SearchEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    MainWindow* pWindow = (MainWindow*)GetWindowLongPtr(GetParent(hwnd), GWLP_USERDATA);
+    
+    if (uMsg == WM_KEYDOWN) {
+        if (wParam == VK_UP) {
+            if (pWindow) {
+                pWindow->NavigateSearchHistory(-1);
+            }
+            return 0;
+        } else if (wParam == VK_DOWN) {
+            if (pWindow) {
+                pWindow->NavigateSearchHistory(1);
+            }
+            return 0;
+        }
+    }
+    
+    return CallWindowProc(g_oldSearchProc, hwnd, uMsg, wParam, lParam);
+}
+
 MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdit(NULL), m_hwndSearch(NULL), m_hwndToolbar(NULL), m_hwndStatus(NULL), m_db(db) {
     m_colors = m_db->GetColors();
+    m_searchHistory = m_db->GetSearchHistory();
 }
 
 MainWindow::~MainWindow() {
@@ -196,7 +218,10 @@ void MainWindow::OnCreate() {
     m_hwndSearch = CreateWindow(L"EDIT", L"", 
         WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_SEARCH, GetModuleHandle(NULL), NULL);
-    SendMessage(m_hwndSearch, EM_SETCUEBANNER, TRUE, (LPARAM)L"Search...");
+    SendMessage(m_hwndSearch, EM_SETCUEBANNER, TRUE, (LPARAM)L"Search (↑↓ for History)");
+    
+    // Subclass search box to handle arrow keys
+    g_oldSearchProc = (WNDPROC)SetWindowLongPtr(m_hwndSearch, GWLP_WNDPROC, (LONG_PTR)SearchEditProc);
 
     // Create List View (Left Panel)
     m_hwndList = CreateWindow(WC_LISTVIEW, L"", 
@@ -522,6 +547,23 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
             int len = GetWindowTextLength(m_hwndSearch);
             std::vector<wchar_t> buf(len + 1);
             GetWindowText(m_hwndSearch, &buf[0], len + 1);
+            
+            std::string currentTerm = Utils::WideToUtf8(&buf[0]);
+            
+            // Track when search term changed for history saving
+            if (currentTerm != m_lastSearchTerm) {
+                // If previous term existed for 15+ seconds and was cleared, save it
+                if (!m_lastSearchTerm.empty() && currentTerm.empty()) {
+                    DWORD now = GetTickCount();
+                    if (m_lastSearchChangeTime > 0 && (now - m_lastSearchChangeTime) >= 15000) {
+                        SaveSearchHistory();
+                    }
+                }
+                m_lastSearchTerm = currentTerm;
+                m_lastSearchChangeTime = GetTickCount();
+                m_searchHistoryPos = -1; // Reset history navigation when typing
+            }
+            
             bool autoSelect = !m_isNewNote; // avoid pulling focus to list while composing a new note
             LoadNotesList(&buf[0], m_searchTitleOnly, autoSelect);
         }
@@ -1492,4 +1534,42 @@ void MainWindow::UpdateWindowTitle() {
     }
     
     SetWindowText(m_hwnd, title.c_str());
+}
+
+void MainWindow::SaveSearchHistory() {
+    if (!m_lastSearchTerm.empty()) {
+        if (m_db->AddSearchHistory(m_lastSearchTerm)) {
+            // Reload search history from database
+            m_searchHistory = m_db->GetSearchHistory();
+            m_searchHistoryPos = -1;
+        }
+    }
+}
+
+void MainWindow::NavigateSearchHistory(int offset) {
+    if (m_searchHistory.empty()) {
+        return;
+    }
+    
+    // Initialize position if not set
+    if (m_searchHistoryPos == -1) {
+        if (offset < 0) {
+            m_searchHistoryPos = 0;
+        } else {
+            return; // Can't go forward from current position
+        }
+    } else {
+        int newPos = m_searchHistoryPos + offset;
+        if (newPos < 0 || newPos >= (int)m_searchHistory.size()) {
+            return; // Out of bounds
+        }
+        m_searchHistoryPos = newPos;
+    }
+    
+    // Set the search box to the historical term
+    std::wstring wTerm = Utils::Utf8ToWide(m_searchHistory[m_searchHistoryPos]);
+    SetWindowText(m_hwndSearch, wTerm.c_str());
+    
+    // Move cursor to end
+    SendMessage(m_hwndSearch, EM_SETSEL, wTerm.length(), wTerm.length());
 }

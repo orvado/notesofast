@@ -13,6 +13,9 @@ public:
 
     BOOL Create(PCWSTR lpWindowName, DWORD dwStyle, DWORD dwExStyle = 0, int x = CW_USEDEFAULT, int y = CW_USEDEFAULT, int nWidth = CW_USEDEFAULT, int nHeight = CW_USEDEFAULT, HWND hWndParent = 0, HMENU hMenu = 0);
     HWND Window() const { return m_hwnd; }
+    
+    // Public for window procedure callbacks
+    void NavigateSearchHistory(int offset);
 
 protected:
     virtual LRESULT HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -55,6 +58,7 @@ protected:
     void UpdateHistoryButtons();
     int FindListIndexByNoteId(int noteId);
     void UpdateWindowTitle();
+    void SaveSearchHistory();
 
     HWND m_hwnd;
     HWND m_hwndList;
@@ -91,4 +95,10 @@ protected:
     int m_historyPos = -1;
     bool m_navigatingHistory = false;
     bool m_isNewNote = false;
+    
+    // Search history
+    std::vector<std::string> m_searchHistory;
+    int m_searchHistoryPos = -1;
+    std::string m_lastSearchTerm;
+    DWORD m_lastSearchChangeTime = 0;
 };
