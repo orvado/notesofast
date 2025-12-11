@@ -514,6 +514,7 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
             m_isDirty = true;
+            UpdateWindowTitle();
         }
         break;
     case ID_SEARCH:
@@ -877,6 +878,8 @@ void MainWindow::LoadNoteContent(int listIndex) {
         if (!m_navigatingHistory) {
             RecordHistory(realIndex);
         }
+        
+        UpdateWindowTitle();
     } else {
         m_currentNoteIndex = -1;
         SetWindowText(m_hwndEdit, L"");
@@ -888,6 +891,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_ARCHIVE, FALSE);
         SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_TOGGLE_CHECKLIST, FALSE);
         UpdateChecklistUI();
+        UpdateWindowTitle();
     }
 }
 
@@ -924,6 +928,7 @@ void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfter
             m_isNewNote = false;
             SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Note saved");
             LoadNotesList(m_currentSearchFilter, m_searchTitleOnly, autoSelectAfterSave, preferredSelectNoteId == -1 ? newNote.id : preferredSelectNoteId);
+            UpdateWindowTitle();
         }
         return;
     }
@@ -972,6 +977,8 @@ void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfter
                 break;
             }
         }
+        
+        UpdateWindowTitle();
     }
 }
 
@@ -994,6 +1001,7 @@ void MainWindow::CreateNewNote() {
     // Clear search so user sees full list once saved later
     SetWindowText(m_hwndSearch, L"");
     SetFocus(m_hwndEdit);
+    UpdateWindowTitle();
 }
 
 void MainWindow::DeleteCurrentNote() {
@@ -1468,4 +1476,20 @@ void MainWindow::UpdateHistoryButtons() {
     bool canForward = m_historyPos >= 0 && m_historyPos + 1 < (int)m_history.size();
     SendMessage(m_hwndToolbar, TB_ENABLEBUTTON, IDM_HIST_BACK, canBack ? TRUE : FALSE);
     SendMessage(m_hwndToolbar, TB_ENABLEBUTTON, IDM_HIST_FORWARD, canForward ? TRUE : FALSE);
+}
+
+void MainWindow::UpdateWindowTitle() {
+    std::wstring title = L"Note So Fast";
+    
+    if (m_isNewNote) {
+        title += L" - Untitled Note *";
+    } else if (m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size()) {
+        title += L" - ";
+        title += Utils::Utf8ToWide(m_notes[m_currentNoteIndex].title);
+        if (m_isDirty) {
+            title += L" *";
+        }
+    }
+    
+    SetWindowText(m_hwnd, title.c_str());
 }

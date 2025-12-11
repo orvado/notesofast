@@ -54,6 +54,7 @@ protected:
     void NavigateHistory(int offset);
     void UpdateHistoryButtons();
     int FindListIndexByNoteId(int noteId);
+    void UpdateWindowTitle();
 
     HWND m_hwnd;
     HWND m_hwndList;
