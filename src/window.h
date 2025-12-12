@@ -101,7 +101,7 @@ protected:
     int m_historyPos = -1;
     bool m_navigatingHistory = false;
     bool m_isNewNote = false;
-    bool m_applyingSpellFormat = false;  // Suppress dirty flag during formatting
+    bool m_spellCheckDeferred = false;   // Selection active; rerun once selection clears
     
     // Search history
     std::vector<std::string> m_searchHistory;
@@ -111,6 +111,21 @@ protected:
 
     // Spell checking
     std::unique_ptr<SpellChecker> m_spellChecker;
+    struct WordAction {
+        LONG start;
+        std::wstring text;
+    };
     std::vector<SpellChecker::Range> m_lastMisses;
     std::wstring m_lastCheckedText;  // Store text that was analyzed for spell check
+    std::vector<WordAction> m_wordUndoStack;
+    std::vector<WordAction> m_wordRedoStack;
+    std::wstring m_currentWord;
+    LONG m_currentWordStart = -1;
+    static LRESULT CALLBACK RichEditSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR idSubclass, DWORD_PTR refData);
+    void DrawSpellUnderlines(HDC hdc) const;
+    POINT GetCharPosition(int index) const;
+    void FinalizeCurrentWord();
+    bool PerformWordUndo();
+    bool PerformWordRedo();
+    void ResetWordUndoState();
 };

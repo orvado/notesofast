@@ -4,6 +4,7 @@
 #include <string>
 #include <algorithm>
 #include <memory>
+#include <cwctype>
 
 #define ID_LISTVIEW 1
 #define ID_RICHEDIT 2
@@ -249,6 +250,8 @@ void MainWindow::OnCreate() {
     m_hwndEdit = CreateWindow(MSFTEDIT_CLASS, L"", 
         WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_RICHEDIT, GetModuleHandle(NULL), NULL);
+
+    SetWindowSubclass(m_hwndEdit, RichEditSubclassProc, 1, (DWORD_PTR)this);
     
     // Set font for Rich Edit
     m_hFont = CreateFont(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
@@ -256,7 +259,7 @@ void MainWindow::OnCreate() {
 
     // Enable Auto-URL detection
     SendMessage(m_hwndEdit, EM_AUTOURLDETECT, TRUE, 0);
-    SendMessage(m_hwndEdit, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_LINK);
+    SendMessage(m_hwndEdit, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_LINK | ENM_SELCHANGE);
 
     // Create Toolbar (Top)
     m_hwndToolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | TBSTYLE_LIST | CCS_NODIVIDER, 0, 0, 0, 0, m_hwnd, (HMENU)ID_TOOLBAR, GetModuleHandle(NULL), NULL);
@@ -569,10 +572,8 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         break;
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
-            if (!m_applyingSpellFormat) {
-                m_isDirty = true;
-                UpdateWindowTitle();
-            }
+            m_isDirty = true;
+            UpdateWindowTitle();
             ScheduleSpellCheck();
         }
         break;
@@ -612,6 +613,15 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
 
 LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
     LPNMHDR pnmh = (LPNMHDR)lParam;
+
+    if (pnmh->idFrom == ID_RICHEDIT && pnmh->code == EN_SELCHANGE) {
+        const SELCHANGE* sc = (const SELCHANGE*)lParam;
+        if (sc->chrg.cpMin == sc->chrg.cpMax && m_spellCheckDeferred) {
+            ScheduleSpellCheck();
+            m_spellCheckDeferred = false;
+        }
+        return 0;
+    }
     
     if (pnmh->code == TTN_GETDISPINFOW) {
         LPNMTTDISPINFOW pInfo = (LPNMTTDISPINFOW)lParam;
@@ -935,6 +945,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         m_currentNoteIndex = realIndex;
         std::wstring wContent = Utils::Utf8ToWide(m_notes[realIndex].content);
         SetWindowText(m_hwndEdit, wContent.c_str());
+        ResetWordUndoState();
         m_isDirty = false;
         
         // Update Toolbar State
@@ -961,6 +972,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
     } else {
         m_currentNoteIndex = -1;
         SetWindowText(m_hwndEdit, L"");
+        ResetWordUndoState();
         m_isDirty = false;
         m_isNewNote = false;
         m_checklistMode = false;
@@ -1552,7 +1564,7 @@ void MainWindow::OnTimer(UINT_PTR timerId) {
 
 void MainWindow::ScheduleSpellCheck() {
     KillTimer(m_hwnd, ID_SPELLCHECK_TIMER);
-    SetTimer(m_hwnd, ID_SPELLCHECK_TIMER, 400, NULL);
+    SetTimer(m_hwnd, ID_SPELLCHECK_TIMER, 600, NULL);
 }
 
 void MainWindow::RunSpellCheck() {
@@ -1563,42 +1575,32 @@ void MainWindow::RunSpellCheck() {
     // Get cursor position to check for active selection
     CHARRANGE cursorPos = {0};
     SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&cursorPos);
-    
-    // Pause spell checking if text is selected - don't interfere with user selection
     if (cursorPos.cpMin != cursorPos.cpMax) {
+        m_spellCheckDeferred = true;
         return;
     }
-    
     int cursorEnd = cursorPos.cpMax;
 
-    // Use EM_GETTEXTEX to get text in a way that's guaranteed to match RichEdit position semantics
-    GETTEXTEX gtx = {};
-    gtx.flags = GT_DEFAULT;
-    gtx.cb = 1024 * 1024;  // Max size
-    gtx.codepage = 1200;  // Unicode (UTF-16 LE)
-    
+    // Use EM_GETTEXTLENGTHEX + EM_GETTEXTEX so text positions match RichEdit semantics
+    GETTEXTLENGTHEX ltx = {};
+    ltx.flags = GTL_DEFAULT;
+    ltx.codepage = 1200; // UTF-16LE
+    int textLen = (int)SendMessage(m_hwndEdit, EM_GETTEXTLENGTHEX, (WPARAM)&ltx, 0);
+
     std::wstring text;
-    text.resize(gtx.cb / sizeof(wchar_t));
-    
-    int actualLen = SendMessage(m_hwndEdit, EM_GETTEXTEX, (WPARAM)&gtx, (LPARAM)&text[0]);
-    if (actualLen > 0) {
-        text.resize(actualLen);
-    } else {
-        text.clear();
+    if (textLen > 0) {
+        GETTEXTEX gtx = {};
+        gtx.flags = GT_DEFAULT;
+        gtx.codepage = 1200;
+        gtx.cb = (textLen + 1) * (DWORD)sizeof(wchar_t);
+        text.resize(textLen + 1);
+        int actualLen = (int)SendMessage(m_hwndEdit, EM_GETTEXTEX, (WPARAM)&gtx, (LPARAM)&text[0]);
+        if (actualLen > 0) {
+            text.resize(actualLen);
+        } else {
+            text.clear();
+        }
     }
-
-    // Mark that we're applying formatting so EN_CHANGE doesn't set dirty flag
-    m_applyingSpellFormat = true;
-
-    // Clear all underlines and text color formatting
-    CHARFORMAT2 clearFmt;
-    ZeroMemory(&clearFmt, sizeof(clearFmt));
-    clearFmt.cbSize = sizeof(clearFmt);
-    clearFmt.dwMask = CFM_UNDERLINE | CFM_UNDERLINETYPE | CFM_COLOR;
-    clearFmt.dwEffects = 0;
-    clearFmt.bUnderlineType = 0;
-    clearFmt.crTextColor = RGB(0, 0, 0);  // Default black text
-    SendMessage(m_hwndEdit, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&clearFmt);
 
     auto misses = m_spellChecker->FindMisspellings(text);
 
@@ -1626,40 +1628,24 @@ void MainWindow::RunSpellCheck() {
         filteredMisses.resize(kMaxMisses);
     }
 
-    // Store current text state to verify ranges are still valid
-    m_lastCheckedText = text;
-    m_lastMisses = filteredMisses;
-
-    CHARRANGE originalSel = {0};
-    SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&originalSel);
-
-    if (!filteredMisses.empty()) {
-        CHARFORMAT2 missFmt;
-        ZeroMemory(&missFmt, sizeof(missFmt));
-        missFmt.cbSize = sizeof(missFmt);
-        missFmt.dwMask = CFM_UNDERLINE | CFM_COLOR | CFM_UNDERLINETYPE;
-        missFmt.dwEffects = CFE_UNDERLINE;
-        missFmt.crTextColor = RGB(200, 0, 0);
-        missFmt.bUnderlineType = CFU_UNDERLINE;
-
-        for (const auto& r : filteredMisses) {
-            // Validate range bounds to prevent out-of-bounds formatting
-            int textLen = static_cast<int>(text.size());
-            if (r.start < 0 || r.length <= 0 || r.start + r.length > textLen) {
-                continue;
-            }
-            
-            CHARRANGE cr;
-            cr.cpMin = r.start;
-            cr.cpMax = r.start + r.length;
-            SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
-            SendMessage(m_hwndEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&missFmt);
+    auto rangesEqual = [](const std::vector<SpellChecker::Range>& a, const std::vector<SpellChecker::Range>& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].start != b[i].start || a[i].length != b[i].length) return false;
         }
+        return true;
+    };
+
+    // If nothing changed, avoid extra redraws
+    if (text == m_lastCheckedText && rangesEqual(filteredMisses, m_lastMisses)) {
+        m_spellCheckDeferred = false;
+        return;
     }
 
-    SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&originalSel);
-
-    m_applyingSpellFormat = false;
+    m_lastCheckedText = text;
+    m_lastMisses = filteredMisses;
+    m_spellCheckDeferred = false;
+    InvalidateRect(m_hwndEdit, NULL, FALSE);
 }
 
 bool MainWindow::PromptToSaveIfDirty(int preferredSelectNoteId, bool autoSelectAfterSave) {
@@ -1682,6 +1668,233 @@ bool MainWindow::PromptToSaveIfDirty(int preferredSelectNoteId, bool autoSelectA
     }
     // Discard
     m_isDirty = false;
+    return true;
+}
+
+LRESULT CALLBACK MainWindow::RichEditSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR idSubclass, DWORD_PTR refData) {
+    MainWindow* self = reinterpret_cast<MainWindow*>(refData);
+    if (!self) {
+        return DefSubclassProc(hwnd, uMsg, wParam, lParam);
+    }
+
+    switch (uMsg) {
+    case WM_PAINT: {
+        LRESULT res = DefSubclassProc(hwnd, uMsg, wParam, lParam);
+        HDC hdc = GetDC(hwnd);
+        if (hdc) {
+            self->DrawSpellUnderlines(hdc);
+            ReleaseDC(hwnd, hdc);
+        }
+        return res;
+    }
+    case WM_KEYDOWN:
+        if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+            if (wParam == 'Z') {
+                self->FinalizeCurrentWord();
+                if (self->PerformWordUndo()) {
+                    return 0;
+                }
+            } else if (wParam == 'Y') {
+                self->FinalizeCurrentWord();
+                if (self->PerformWordRedo()) {
+                    return 0;
+                }
+            }
+        } else if (wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_UP || wParam == VK_DOWN ||
+                   wParam == VK_HOME || wParam == VK_END || wParam == VK_SPACE || wParam == VK_TAB ||
+                   wParam == VK_RETURN) {
+            self->FinalizeCurrentWord();
+        }
+        break;
+    case WM_CHAR: {
+        wchar_t ch = (wchar_t)wParam;
+        if (ch == 0x08) {
+            if (!self->m_currentWord.empty()) {
+                self->m_currentWord.pop_back();
+                if (self->m_currentWord.empty()) {
+                    self->m_currentWordStart = -1;
+                }
+            }
+        } else if (iswspace(ch)) {
+            self->FinalizeCurrentWord();
+        } else if (iswgraph(ch)) {
+            if (self->m_currentWord.empty()) {
+                CHARRANGE cr;
+                SendMessage(hwnd, EM_EXGETSEL, 0, (LPARAM)&cr);
+                self->m_currentWordStart = cr.cpMin;
+            }
+            self->m_currentWord.push_back(ch);
+            self->m_wordRedoStack.clear();
+        } else {
+            self->FinalizeCurrentWord();
+        }
+        break;
+    }
+    case WM_HSCROLL:
+    case WM_VSCROLL:
+    case WM_MOUSEWHEEL:
+    case WM_SIZE:
+        {
+            LRESULT res = DefSubclassProc(hwnd, uMsg, wParam, lParam);
+            HDC hdc = GetDC(hwnd);
+            if (hdc) {
+                self->DrawSpellUnderlines(hdc);
+                ReleaseDC(hwnd, hdc);
+            }
+            return res;
+        }
+    }
+
+    return DefSubclassProc(hwnd, uMsg, wParam, lParam);
+}
+
+POINT MainWindow::GetCharPosition(int index) const {
+    POINT pt = {0, 0};
+    LRESULT res = SendMessage(m_hwndEdit, EM_POSFROMCHAR, index, 0);
+    if (res != -1) {
+        pt.x = LOWORD(res);
+        pt.y = HIWORD(res);
+    }
+    return pt;
+}
+
+void MainWindow::DrawSpellUnderlines(HDC hdc) const {
+    if (m_lastMisses.empty() || hdc == NULL) {
+        return;
+    }
+
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(200, 0, 0));
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HFONT font = (HFONT)SendMessage(m_hwndEdit, WM_GETFONT, 0, 0);
+    HFONT oldFont = (HFONT)SelectObject(hdc, font);
+
+    TEXTMETRIC tm;
+    GetTextMetrics(hdc, &tm);
+    int underlineY = tm.tmAscent + 2;
+    int safeTextLen = (int)m_lastCheckedText.size();
+
+    for (const auto& miss : m_lastMisses) {
+        int start = miss.start;
+        int end = start + miss.length;
+        while (start < end) {
+            int line = (int)SendMessage(m_hwndEdit, EM_LINEFROMCHAR, start, 0);
+            if (line == -1) {
+                break;
+            }
+            (void)SendMessage(m_hwndEdit, EM_LINEINDEX, line, 0);
+            int nextLineStart = (int)SendMessage(m_hwndEdit, EM_LINEINDEX, line + 1, 0);
+            if (nextLineStart == -1) {
+                nextLineStart = safeTextLen;
+            }
+            int segmentEnd = (end < nextLineStart) ? end : nextLineStart;
+
+            POINT pStart = GetCharPosition(start);
+            POINT pEnd;
+            if (segmentEnd < safeTextLen) {
+                pEnd = GetCharPosition(segmentEnd);
+            } else if (segmentEnd > start) {
+                pEnd = GetCharPosition(segmentEnd - 1);
+                if (segmentEnd - 1 >= 0 && segmentEnd - 1 < safeTextLen) {
+                    SIZE sz = {0};
+                    const wchar_t ch = m_lastCheckedText[segmentEnd - 1];
+                    GetTextExtentPoint32(hdc, &ch, 1, &sz);
+                    pEnd.x += sz.cx;
+                }
+            } else {
+                pEnd = pStart;
+            }
+
+            int y = pStart.y + underlineY;
+            MoveToEx(hdc, pStart.x, y, NULL);
+            LineTo(hdc, pEnd.x, y);
+
+            start = segmentEnd;
+        }
+    }
+
+    SelectObject(hdc, oldFont);
+    SelectObject(hdc, oldPen);
+    DeleteObject(pen);
+}
+
+void MainWindow::ResetWordUndoState() {
+    m_wordUndoStack.clear();
+    m_wordRedoStack.clear();
+    m_currentWord.clear();
+    m_currentWordStart = -1;
+}
+
+void MainWindow::FinalizeCurrentWord() {
+    if (m_currentWord.empty()) {
+        m_currentWordStart = -1;
+        return;
+    }
+
+    LONG start = m_currentWordStart;
+    if (start < 0) {
+        CHARRANGE cr;
+        SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&cr);
+        start = cr.cpMin - (LONG)m_currentWord.size();
+        if (start < 0) start = 0;
+    }
+
+    WordAction action;
+    action.start = start;
+    action.text = m_currentWord;
+    m_wordUndoStack.push_back(action);
+    m_wordRedoStack.clear();
+    m_currentWord.clear();
+    m_currentWordStart = -1;
+}
+
+bool MainWindow::PerformWordUndo() {
+    if (m_wordUndoStack.empty()) {
+        return false;
+    }
+
+    WordAction action = m_wordUndoStack.back();
+    m_wordUndoStack.pop_back();
+
+    LRESULT textLen = SendMessage(m_hwndEdit, WM_GETTEXTLENGTH, 0, 0);
+    LONG start = action.start;
+    if (start < 0) start = 0;
+    if (start > textLen) start = (LONG)textLen;
+
+    LONG end = start + (LONG)action.text.size();
+    if (end > textLen) {
+        end = (LONG)textLen;
+    }
+
+    CHARRANGE cr = { start, end };
+    SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
+    SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)L"");
+    m_wordRedoStack.push_back(action);
+    m_currentWord.clear();
+    m_currentWordStart = -1;
+    InvalidateRect(m_hwndEdit, NULL, TRUE);
+    return true;
+}
+
+bool MainWindow::PerformWordRedo() {
+    if (m_wordRedoStack.empty()) {
+        return false;
+    }
+
+    WordAction action = m_wordRedoStack.back();
+    m_wordRedoStack.pop_back();
+
+    LRESULT textLen = SendMessage(m_hwndEdit, WM_GETTEXTLENGTH, 0, 0);
+    LONG start = action.start;
+    if (start < 0) start = 0;
+    if (start > textLen) start = (LONG)textLen;
+
+    CHARRANGE cr = { start, start };
+    SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
+    SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)action.text.c_str());
+    m_wordUndoStack.push_back(action);
+    m_currentWord.clear();
+    m_currentWordStart = -1;
+    InvalidateRect(m_hwndEdit, NULL, TRUE);
     return true;
 }
 

@@ -5,6 +5,10 @@ VCPKG_ROOT=C:\Users\Ken\vcpkg
 VCPKG_TRIPLET=x86-windows
 !ENDIF
 
+!IF !EXIST("$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\include\hunspell\hunspell.hxx")
+VCPKG_ROOT=C:\Users\Ken\vcpkg
+!ENDIF
+
 CC=cl
 CFLAGS=/EHsc /DUNICODE /D_UNICODE /Iinclude /I"$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\include"
 LDFLAGS=/link /LIBPATH:"$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\lib" hunspell-1.7.lib intl.lib iconv.lib user32.lib gdi32.lib comctl32.lib shell32.lib comdlg32.lib
