@@ -78,7 +78,10 @@ LRESULT CALLBACK SearchEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     return CallWindowProc(g_oldSearchProc, hwnd, uMsg, wParam, lParam);
 }
 
-MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdit(NULL), m_hwndSearch(NULL), m_hwndToolbar(NULL), m_hwndStatus(NULL), m_db(db) {
+MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdit(NULL), m_hwndSearch(NULL), 
+    m_hwndToolbar(NULL), m_hwndMarkdownToolbar(NULL), m_hwndStatus(NULL), 
+    m_hwndChecklistList(NULL), m_hwndChecklistEdit(NULL), m_hwndAddItem(NULL), 
+    m_hwndRemoveItem(NULL), m_hwndMoveUp(NULL), m_hwndMoveDown(NULL), m_db(db) {
     m_colors = m_db->GetColors();
     m_searchHistory = m_db->GetSearchHistory();
 }
@@ -392,6 +395,60 @@ void MainWindow::OnCreate() {
 
     SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 3, (LPARAM)&tbbFormat);
 
+    // Create Markdown Toolbar (initially hidden or shown depending on mode)
+    m_hwndMarkdownToolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL, 
+        WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | TBSTYLE_LIST | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, 
+        0, 0, 0, 0, m_hwnd, (HMENU)ID_MARKDOWN_TOOLBAR, GetModuleHandle(NULL), NULL);
+    SendMessage(m_hwndMarkdownToolbar, TB_BUTTONSTRUCTSIZE, (WPARAM)sizeof(TBBUTTON), 0);
+
+    // Add strings for markdown buttons
+    int iMBold = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"B\0");
+    int iMItalic = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"I\0");
+    int iMStrike = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"S\0");
+    int iMPara = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Paragraph\0");
+    int iMQuote = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"\"\0");
+    int iMOL = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"1. \x2014\0");
+    int iMUL = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"\x2022 \x2014\0");
+    int iMLink = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Link\0");
+    int iMLine = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Line\0");
+    int iMPreview = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"View\0");
+    int iMUndo = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Undo\0");
+    int iMRedo = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Redo\0");
+
+    TBBUTTON mtbb[18];
+    ZeroMemory(mtbb, sizeof(mtbb));
+
+    int i = 0;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_BOLD; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMBold; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_ITALIC; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMItalic; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_STRIKE; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMStrike; i++;
+    
+    mtbb[i].fsStyle = BTNS_SEP; i++;
+
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_PARA; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_DROPDOWN | BTNS_AUTOSIZE; mtbb[i].iString = iMPara; i++;
+    
+    mtbb[i].fsStyle = BTNS_SEP; i++;
+
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_QUOTE; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMQuote; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_OL; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMOL; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_UL; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMUL; i++;
+    
+    mtbb[i].fsStyle = BTNS_SEP; i++;
+
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_LINK; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMLink; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_HR; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMLine; i++;
+    
+    mtbb[i].fsStyle = BTNS_SEP; i++;
+
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_PREVIEW; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMPreview; i++;
+    
+    mtbb[i].fsStyle = BTNS_SEP; i++;
+
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_UNDO; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMUndo; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_REDO; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMRedo; i++;
+
+    SendMessage(m_hwndMarkdownToolbar, TB_ADDBUTTONS, i, (LPARAM)&mtbb);
+
     // Create Checklist Controls (initially hidden)
     m_hwndChecklistList = CreateWindow(WC_LISTVIEW, L"", 
         WS_CHILD | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SHOWSELALWAYS | LVS_SINGLESEL,
@@ -497,8 +554,13 @@ void MainWindow::OnSize(int width, int height) {
         
         // Checklist list
         MoveWindow(m_hwndChecklistList, rightPaneX, checklistTop, rightPaneWidth, checklistHeight, TRUE);
+        
+        ShowWindow(m_hwndMarkdownToolbar, SW_HIDE);
     } else {
-        MoveWindow(m_hwndEdit, rightPaneX, toolbarHeight, rightPaneWidth, clientHeight, TRUE);
+        int markdownToolbarHeight = 30;
+        ShowWindow(m_hwndMarkdownToolbar, SW_SHOW);
+        MoveWindow(m_hwndMarkdownToolbar, rightPaneX, toolbarHeight, rightPaneWidth, markdownToolbarHeight, TRUE);
+        MoveWindow(m_hwndEdit, rightPaneX, toolbarHeight + markdownToolbarHeight, rightPaneWidth, clientHeight - markdownToolbarHeight, TRUE);
     }
 }
 
@@ -588,6 +650,78 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_SETTINGS:
         CreateSettingsDialog(m_hwnd, m_db);
         break;
+    case IDM_MARKDOWN_BOLD:
+        ApplyMarkdown(L"**", L"**");
+        break;
+    case IDM_MARKDOWN_ITALIC:
+        ApplyMarkdown(L"*", L"*");
+        break;
+    case IDM_MARKDOWN_STRIKE:
+        ApplyMarkdown(L"~~", L"~~");
+        break;
+    case IDM_MARKDOWN_H1:
+        ApplyLineMarkdown(L"# ");
+        break;
+    case IDM_MARKDOWN_H2:
+        ApplyLineMarkdown(L"## ");
+        break;
+    case IDM_MARKDOWN_H3:
+        ApplyLineMarkdown(L"### ");
+        break;
+    case IDM_MARKDOWN_H4:
+        ApplyLineMarkdown(L"#### ");
+        break;
+    case IDM_MARKDOWN_H5:
+        ApplyLineMarkdown(L"##### ");
+        break;
+    case IDM_MARKDOWN_H6:
+        ApplyLineMarkdown(L"###### ");
+        break;
+    case IDM_MARKDOWN_QUOTE:
+        ApplyLineMarkdown(L"> ");
+        break;
+    case IDM_MARKDOWN_CODE:
+        ApplyMarkdown(L"`", L"`");
+        break;
+    case IDM_MARKDOWN_CODEBLOCK:
+        ApplyMarkdown(L"    ", L"");
+        break;
+    case IDM_MARKDOWN_LINK:
+        ApplyMarkdown(L"[", L"](http://)");
+        break;
+    case IDM_MARKDOWN_UL:
+        ApplyLineMarkdown(L"* ");
+        break;
+    case IDM_MARKDOWN_OL:
+        ApplyLineMarkdown(L"1. ");
+        break;
+    case IDM_MARKDOWN_HR:
+        ApplyLineMarkdown(L"---\n");
+        break;
+    case IDM_MARKDOWN_UNDO:
+        SendMessage(m_hwndEdit, EM_UNDO, 0, 0);
+        break;
+    case IDM_MARKDOWN_REDO:
+        SendMessage(m_hwndEdit, EM_REDO, 0, 0);
+        break;
+    case IDM_MARKDOWN_PARA:
+        {
+            RECT rc;
+            SendMessage(m_hwndMarkdownToolbar, TB_GETRECT, IDM_MARKDOWN_PARA, (LPARAM)&rc);
+            MapWindowPoints(m_hwndMarkdownToolbar, NULL, (LPPOINT)&rc, 2);
+            
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H1, L"Header 1");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H2, L"Header 2");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H3, L"Header 3");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H4, L"Header 4");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H5, L"Header 5");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H6, L"Header 6");
+            
+            TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, m_hwnd, NULL);
+            DestroyMenu(hMenu);
+        }
+        break;
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
             m_isDirty = true;
@@ -661,8 +795,47 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             case IDM_HIST_FORWARD: wcscpy_s(pInfo->szText, L"Forward in history"); break;
             case IDM_SEARCH_MODE_TOGGLE: wcscpy_s(pInfo->szText, L"Search Title and Content"); break;
             case IDM_SETTINGS: wcscpy_s(pInfo->szText, L"Settings"); break;
+            case IDM_MARKDOWN_BOLD: wcscpy_s(pInfo->szText, L"Bold"); break;
+            case IDM_MARKDOWN_ITALIC: wcscpy_s(pInfo->szText, L"Italic"); break;
+            case IDM_MARKDOWN_STRIKE: wcscpy_s(pInfo->szText, L"Strikethrough"); break;
+            case IDM_MARKDOWN_PARA: wcscpy_s(pInfo->szText, L"Paragraph / Headers"); break;
+            case IDM_MARKDOWN_H1: wcscpy_s(pInfo->szText, L"Header 1"); break;
+            case IDM_MARKDOWN_H2: wcscpy_s(pInfo->szText, L"Header 2"); break;
+            case IDM_MARKDOWN_H3: wcscpy_s(pInfo->szText, L"Header 3"); break;
+            case IDM_MARKDOWN_H4: wcscpy_s(pInfo->szText, L"Header 4"); break;
+            case IDM_MARKDOWN_H5: wcscpy_s(pInfo->szText, L"Header 5"); break;
+            case IDM_MARKDOWN_H6: wcscpy_s(pInfo->szText, L"Header 6"); break;
+            case IDM_MARKDOWN_QUOTE: wcscpy_s(pInfo->szText, L"Blockquote"); break;
+            case IDM_MARKDOWN_OL: wcscpy_s(pInfo->szText, L"Numbered List"); break;
+            case IDM_MARKDOWN_UL: wcscpy_s(pInfo->szText, L"Bullet List"); break;
+            case IDM_MARKDOWN_LINK: wcscpy_s(pInfo->szText, L"Insert Link"); break;
+            case IDM_MARKDOWN_HR: wcscpy_s(pInfo->szText, L"Horizontal Line"); break;
+            case IDM_MARKDOWN_PREVIEW: wcscpy_s(pInfo->szText, L"Preview Markdown"); break;
+            case IDM_MARKDOWN_UNDO: wcscpy_s(pInfo->szText, L"Undo"); break;
+            case IDM_MARKDOWN_REDO: wcscpy_s(pInfo->szText, L"Redo"); break;
         }
         return 0;
+    }
+
+    if (pnmh->code == TBN_DROPDOWN) {
+        LPNMTOOLBAR lpnmtb = (LPNMTOOLBAR)lParam;
+        if (lpnmtb->iItem == IDM_MARKDOWN_PARA) {
+            RECT rc;
+            SendMessage(m_hwndMarkdownToolbar, TB_GETRECT, IDM_MARKDOWN_PARA, (LPARAM)&rc);
+            MapWindowPoints(m_hwndMarkdownToolbar, NULL, (LPPOINT)&rc, 2);
+            
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H1, L"Header 1 (#)");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H2, L"Header 2 (##)");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H3, L"Header 3 (###)");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H4, L"Header 4 (####)");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H5, L"Header 5 (#####)");
+            AppendMenu(hMenu, MF_STRING, IDM_MARKDOWN_H6, L"Header 6 (######)");
+            
+            TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, m_hwnd, NULL);
+            DestroyMenu(hMenu);
+            return TBDDRET_DEFAULT;
+        }
     }
 
     if (pnmh->idFrom == ID_CHECKLIST_LIST) {
@@ -2004,6 +2177,53 @@ void MainWindow::UpdateWindowTitle() {
     }
     
     SetWindowText(m_hwnd, title.c_str());
+}
+
+void MainWindow::ApplyMarkdown(const std::wstring& prefix, const std::wstring& suffix) {
+    CHARRANGE cr;
+    SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&cr);
+    
+    if (cr.cpMin == cr.cpMax) {
+        std::wstring text = prefix + suffix;
+        SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)text.c_str());
+        cr.cpMin += (LONG)prefix.length();
+        cr.cpMax = cr.cpMin;
+        SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
+    } else {
+        int len = cr.cpMax - cr.cpMin;
+        wchar_t* buf = new wchar_t[len + 1];
+        
+        TEXTRANGE tr;
+        tr.chrg = cr;
+        tr.lpstrText = buf;
+        SendMessage(m_hwndEdit, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
+        
+        std::wstring selectedText = buf;
+        delete[] buf;
+        
+        std::wstring newText = prefix + selectedText + suffix;
+        SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)newText.c_str());
+    }
+    SetFocus(m_hwndEdit);
+}
+
+void MainWindow::ApplyLineMarkdown(const std::wstring& prefix) {
+    CHARRANGE cr;
+    SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&cr);
+    
+    LRESULT lineIndex = SendMessage(m_hwndEdit, EM_EXLINEFROMCHAR, 0, cr.cpMin);
+    LRESULT lineStart = SendMessage(m_hwndEdit, EM_LINEINDEX, lineIndex, 0);
+    
+    CHARRANGE lineCr;
+    lineCr.cpMin = (LONG)lineStart;
+    lineCr.cpMax = (LONG)lineStart;
+    SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&lineCr);
+    SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)prefix.c_str());
+    
+    cr.cpMin += (LONG)prefix.length();
+    cr.cpMax += (LONG)prefix.length();
+    SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
+    SetFocus(m_hwndEdit);
 }
 
 void MainWindow::SaveSearchHistory() {

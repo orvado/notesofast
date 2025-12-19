@@ -66,12 +66,15 @@ protected:
     void UpdateWindowTitle();
     void SaveSearchHistory();
     void ShowSettingsDialog();
+    void ApplyMarkdown(const std::wstring& prefix, const std::wstring& suffix);
+    void ApplyLineMarkdown(const std::wstring& prefix);
 
     HWND m_hwnd;
     HWND m_hwndList;
     HWND m_hwndEdit;
     HWND m_hwndSearch;
     HWND m_hwndToolbar;
+    HWND m_hwndMarkdownToolbar;
     HWND m_hwndStatus;
     HWND m_hwndChecklistList;
     HWND m_hwndChecklistEdit;
