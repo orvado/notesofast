@@ -12,6 +12,12 @@ public:
         std::string hex_color;
     };
 
+    struct Tag {
+        int id;
+        std::wstring name;
+        int order;
+    };
+
     enum class SortBy {
         DateModified,
         DateCreated,
@@ -48,8 +54,24 @@ public:
     bool AddSearchHistory(const std::string& searchTerm);
     bool ClearOldSearchHistory(int keepCount = 128);
 
+    // Tag methods
+    std::vector<Tag> GetTags();
+    bool CreateTag(Tag& tag);
+    bool UpdateTag(const Tag& tag);
+    bool DeleteTag(int id);
+    bool ReorderTag(int tagId, int newOrder);
+    std::vector<Tag> GetNoteTags(int noteId);
+    bool AddTagToNote(int noteId, int tagId);
+    bool RemoveTagFromNote(int noteId, int tagId);
+
+    // Settings methods
+    std::string GetSetting(const std::string& key, const std::string& defaultValue = "");
+    bool SetSetting(const std::string& key, const std::string& value);
+
 private:
     bool CreateSchema();
     bool InitializeColors();
     sqlite3* m_db;
 };
+
+

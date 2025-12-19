@@ -1,6 +1,8 @@
 #include "window.h"
 #include "utils.h"
 #include "spell_checker.h"
+#include "settings_dialog.h"
+#include "resource.h"
 #include <string>
 #include <algorithm>
 #include <memory>
@@ -265,87 +267,100 @@ void MainWindow::OnCreate() {
     m_hwndToolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | TBSTYLE_LIST | CCS_NODIVIDER, 0, 0, 0, 0, m_hwnd, (HMENU)ID_TOOLBAR, GetModuleHandle(NULL), NULL);
     SendMessage(m_hwndToolbar, TB_BUTTONSTRUCTSIZE, (WPARAM)sizeof(TBBUTTON), 0);
     
-    // Load Standard Images
-    SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_STD_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
-    SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_VIEW_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
-    SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_HIST_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
+    // Add strings to toolbar
+    int iTC = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)L"T+C\0");
+    int iB = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)L"B\0");
+    int iI = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)L"I\0");
+    int iU = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)L"U\0");
+    int iSettings = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)L"Settings\0");
 
-    TBBUTTON tbb[12];
+    // Load Standard Images
+    int stdIdx = (int)SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_STD_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
+    int viewIdx = (int)SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_VIEW_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
+    int histIdx = (int)SendMessage(m_hwndToolbar, TB_LOADIMAGES, (WPARAM)IDB_HIST_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
+
+    TBBUTTON tbb[13];
     ZeroMemory(tbb, sizeof(tbb));
 
-    tbb[0].iBitmap = 15 + 12 + HIST_BACK;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
+    tbb[0].iBitmap = histIdx + HIST_BACK;
     tbb[0].idCommand = IDM_HIST_BACK;
     tbb[0].fsState = TBSTATE_ENABLED;
     tbb[0].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[0].iString = 0;
+    tbb[0].iString = -1;
 
-    tbb[1].iBitmap = 15 + 12 + HIST_FORWARD;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
+    tbb[1].iBitmap = histIdx + HIST_FORWARD;
     tbb[1].idCommand = IDM_HIST_FORWARD;
     tbb[1].fsState = TBSTATE_ENABLED;
     tbb[1].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[1].iString = 0;
+    tbb[1].iString = -1;
 
-    tbb[2].iBitmap = STD_FILENEW;
+    tbb[2].iBitmap = stdIdx + STD_FILENEW;
     tbb[2].idCommand = IDM_NEW;
     tbb[2].fsState = TBSTATE_ENABLED;
     tbb[2].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[2].iString = 0;
+    tbb[2].iString = -1;
 
-    tbb[3].iBitmap = STD_FILESAVE;
+    tbb[3].iBitmap = stdIdx + STD_FILESAVE;
     tbb[3].idCommand = IDM_SAVE;
     tbb[3].fsState = TBSTATE_ENABLED;
     tbb[3].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[3].iString = 0;
+    tbb[3].iString = -1;
 
-    tbb[4].iBitmap = STD_DELETE;
-    tbb[4].idCommand = IDM_DELETE;
+    tbb[4].iBitmap = stdIdx + STD_PROPERTIES;
+    tbb[4].idCommand = IDM_SETTINGS;
     tbb[4].fsState = TBSTATE_ENABLED;
     tbb[4].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[4].iString = 0;
+    tbb[4].iString = iSettings;
 
-    tbb[5].iBitmap = 15 + 6; // VIEW_SORTDATE
-    tbb[5].idCommand = IDM_SORT;
+    tbb[5].iBitmap = stdIdx + STD_DELETE;
+    tbb[5].idCommand = IDM_DELETE;
     tbb[5].fsState = TBSTATE_ENABLED;
     tbb[5].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[5].iString = 0;
+    tbb[5].iString = -1;
 
-    tbb[6].iBitmap = I_IMAGENONE;
-    tbb[6].idCommand = IDM_SEARCH_MODE_TOGGLE;
+    tbb[6].iBitmap = viewIdx + 6; // VIEW_SORTDATE
+    tbb[6].idCommand = IDM_SORT;
     tbb[6].fsState = TBSTATE_ENABLED;
-    tbb[6].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[6].iString = (INT_PTR)L"T+C";
+    tbb[6].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+    tbb[6].iString = -1;
 
-    tbb[7].iBitmap = STD_PRINT;
-    tbb[7].idCommand = IDM_PRINT;
+    tbb[7].iBitmap = I_IMAGENONE;
+    tbb[7].idCommand = IDM_SEARCH_MODE_TOGGLE;
     tbb[7].fsState = TBSTATE_ENABLED;
-    tbb[7].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[7].iString = 0;
+    tbb[7].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[7].iString = iTC;
 
-    tbb[8].iBitmap = 15 + 12 + HIST_FAVORITES;  // Offset for IDB_STD (15) + IDB_VIEW (12) + HIST index
-    tbb[8].idCommand = IDM_PIN;
+    tbb[8].iBitmap = stdIdx + STD_PRINT;
+    tbb[8].idCommand = IDM_PRINT;
     tbb[8].fsState = TBSTATE_ENABLED;
-    tbb[8].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[8].iString = 0;
+    tbb[8].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+    tbb[8].iString = -1;
 
-    tbb[9].iBitmap = STD_FILEOPEN; // Using File Open (folder) for Archive
-    tbb[9].idCommand = IDM_ARCHIVE;
+    tbb[9].iBitmap = histIdx + HIST_FAVORITES;
+    tbb[9].idCommand = IDM_PIN;
     tbb[9].fsState = TBSTATE_ENABLED;
     tbb[9].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[9].iString = 0;
+    tbb[9].iString = -1;
 
-    tbb[10].iBitmap = 15 + 8; // VIEW_PARENTFOLDER (15 is offset for second image list)
-    tbb[10].idCommand = IDM_SHOW_ARCHIVED;
+    tbb[10].iBitmap = stdIdx + STD_FILEOPEN; // Using File Open (folder) for Archive
+    tbb[10].idCommand = IDM_ARCHIVE;
     tbb[10].fsState = TBSTATE_ENABLED;
     tbb[10].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[10].iString = 0;
+    tbb[10].iString = -1;
 
-    tbb[11].iBitmap = 15 + 2; // VIEW_LIST
-    tbb[11].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[11].iBitmap = viewIdx + 8; // VIEW_PARENTFOLDER
+    tbb[11].idCommand = IDM_SHOW_ARCHIVED;
     tbb[11].fsState = TBSTATE_ENABLED;
     tbb[11].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[11].iString = 0;
+    tbb[11].iString = -1;
 
-    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 12, (LPARAM)&tbb);
+    tbb[12].iBitmap = viewIdx + 2; // VIEW_LIST
+    tbb[12].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[12].fsState = TBSTATE_ENABLED;
+    tbb[12].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[12].iString = -1;
+
+    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 13, (LPARAM)&tbb);
     
     // Add Separator
     TBBUTTON tbbSep;
@@ -361,19 +376,19 @@ void MainWindow::OnCreate() {
     tbbFormat[0].idCommand = IDM_FORMAT_BOLD;
     tbbFormat[0].fsState = TBSTATE_ENABLED;
     tbbFormat[0].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbbFormat[0].iString = (INT_PTR)L"B";
+    tbbFormat[0].iString = iB;
 
     tbbFormat[1].iBitmap = I_IMAGENONE;
     tbbFormat[1].idCommand = IDM_FORMAT_ITALIC;
     tbbFormat[1].fsState = TBSTATE_ENABLED;
     tbbFormat[1].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbbFormat[1].iString = (INT_PTR)L"I";
+    tbbFormat[1].iString = iI;
 
     tbbFormat[2].iBitmap = I_IMAGENONE;
     tbbFormat[2].idCommand = IDM_FORMAT_UNDERLINE;
     tbbFormat[2].fsState = TBSTATE_ENABLED;
     tbbFormat[2].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbbFormat[2].iString = (INT_PTR)L"U";
+    tbbFormat[2].iString = iU;
 
     SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 3, (LPARAM)&tbbFormat);
 
@@ -570,6 +585,9 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_HIST_FORWARD:
         NavigateHistory(1);
         break;
+    case IDM_SETTINGS:
+        CreateSettingsDialog(m_hwnd, m_db);
+        break;
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
             m_isDirty = true;
@@ -642,6 +660,7 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             case IDM_HIST_BACK: wcscpy_s(pInfo->szText, L"Back in history"); break;
             case IDM_HIST_FORWARD: wcscpy_s(pInfo->szText, L"Forward in history"); break;
             case IDM_SEARCH_MODE_TOGGLE: wcscpy_s(pInfo->szText, L"Search Title and Content"); break;
+            case IDM_SETTINGS: wcscpy_s(pInfo->szText, L"Settings"); break;
         }
         return 0;
     }

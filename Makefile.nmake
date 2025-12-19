@@ -1,19 +1,21 @@
-!IFNDEF VCPKG_ROOT
+# Detect vcpkg location
+!IF EXIST("C:\Users\Ken\vcpkg\installed\x86-windows\include\hunspell\hunspell.hxx")
 VCPKG_ROOT=C:\Users\Ken\vcpkg
-!ENDIF
-!IFNDEF VCPKG_TRIPLET
+VCPKG_TRIPLET=x86-windows
+!ELSEIFNDEF VCPKG_ROOT
+VCPKG_ROOT=C:\Users\Ken\vcpkg
 VCPKG_TRIPLET=x86-windows
 !ENDIF
 
-!IF !EXIST("$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\include\hunspell\hunspell.hxx")
-VCPKG_ROOT=C:\Users\Ken\vcpkg
+!IFNDEF VCPKG_TRIPLET
+VCPKG_TRIPLET=x86-windows
 !ENDIF
 
 CC=cl
 CFLAGS=/EHsc /DUNICODE /D_UNICODE /Iinclude /I"$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\include"
 LDFLAGS=/link /LIBPATH:"$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\lib" hunspell-1.7.lib intl.lib iconv.lib user32.lib gdi32.lib comctl32.lib shell32.lib comdlg32.lib
 
-SOURCES=src\main.cpp src\window.cpp src\database.cpp src\utils.cpp src\spell_checker.cpp lib\sqlite3.c
+SOURCES=src\main.cpp src\window.cpp src\database.cpp src\utils.cpp src\spell_checker.cpp src\settings_dialog.cpp lib\sqlite3.c
 TARGET=build\NoteSoFast.exe
 
 all: $(TARGET)
@@ -21,7 +23,8 @@ all: $(TARGET)
 $(TARGET): $(SOURCES)
 	@if not exist build mkdir build
 	@if not exist build\dict mkdir build\dict
-	$(CC) $(CFLAGS) $(SOURCES) /Fe:$(TARGET) $(LDFLAGS)
+	rc /i src /fo build\resource.res src\resource.rc
+	$(CC) $(CFLAGS) $(SOURCES) /Fe:$(TARGET) $(LDFLAGS) build\resource.res
 	@if exist dict\en\en_US.aff copy /Y dict\en\en_US.aff build\dict >nul
 	@if exist dict\en\en_US.dic copy /Y dict\en\en_US.dic build\dict >nul
 	copy /Y "$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\bin\hunspell-1.7-0.dll" build >nul

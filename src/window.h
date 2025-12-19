@@ -65,6 +65,7 @@ protected:
     int FindListIndexByNoteId(int noteId);
     void UpdateWindowTitle();
     void SaveSearchHistory();
+    void ShowSettingsDialog();
 
     HWND m_hwnd;
     HWND m_hwndList;

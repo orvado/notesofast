@@ -1,5 +1,6 @@
 #include "database.h"
 #include <iostream>
+#include "utils.h"
 
 Database::Database() {
     m_db = nullptr;
@@ -50,6 +51,32 @@ bool Database::Initialize(const std::string& dbPath) {
     } else {
         sqlite3_finalize(stmt);
     }
+    
+    // Migration: Check for tags and note_tags tables
+    const char* checkTagsSql = "SELECT id FROM tags LIMIT 1";
+    if (sqlite3_prepare_v2(m_db, checkTagsSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        const char* createTagsSql =
+            "CREATE TABLE tags ("
+            "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "    name TEXT NOT NULL,"
+            "    tag_order INTEGER"
+            ");"
+            "CREATE TABLE note_tags ("
+            "    note_id INTEGER,"
+            "    tag_id INTEGER,"
+            "    PRIMARY KEY (note_id, tag_id),"
+            "    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,"
+            "    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE"
+            ");";
+        char* errMsg = nullptr;
+        if (sqlite3_exec(m_db, createTagsSql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+            std::cerr << "Migration error (tags): " << errMsg << std::endl;
+            sqlite3_free(errMsg);
+        }
+    } else {
+        sqlite3_finalize(stmt);
+    }
+
 
     return InitializeColors();
 }
@@ -242,6 +269,22 @@ bool Database::CreateSchema() {
         "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "    search_term TEXT NOT NULL UNIQUE,"
         "    last_used DATETIME DEFAULT CURRENT_TIMESTAMP"
+        ");"
+        "CREATE TABLE IF NOT EXISTS tags ("
+        "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "    name TEXT NOT NULL,"
+        "    tag_order INTEGER"
+        ");"
+        "CREATE TABLE IF NOT EXISTS note_tags ("
+        "    note_id INTEGER,"
+        "    tag_id INTEGER,"
+        "    PRIMARY KEY (note_id, tag_id),"
+        "    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,"
+        "    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE"
+        ");"
+        "CREATE TABLE IF NOT EXISTS settings ("
+        "    key TEXT PRIMARY KEY,"
+        "    value TEXT"
         ");";
 
     char* errMsg = nullptr;
@@ -468,6 +511,177 @@ bool Database::ClearOldSearchHistory(int keepCount) {
     }
     return false;
 }
+
+std::vector<Database::Tag> Database::GetTags() {
+    std::vector<Tag> tags;
+    const char* sql = "SELECT id, name, tag_order FROM tags ORDER BY tag_order";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            Tag tag;
+            tag.id = sqlite3_column_int(stmt, 0);
+            tag.name = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 1));
+            tag.order = sqlite3_column_int(stmt, 2);
+            tags.push_back(tag);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return tags;
+}
+
+bool Database::CreateTag(Tag& tag) {
+    const char* sql = "INSERT INTO tags (name, tag_order) VALUES (?, ?)";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text16(stmt, 1, tag.name.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 2, tag.order);
+
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            tag.id = (int)sqlite3_last_insert_rowid(m_db);
+            sqlite3_finalize(stmt);
+            return true;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return false;
+}
+
+bool Database::UpdateTag(const Tag& tag) {
+    const char* sql = "UPDATE tags SET name = ? WHERE id = ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text16(stmt, 1, tag.name.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 2, tag.id);
+
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
+bool Database::DeleteTag(int id) {
+    // First, remove associations from note_tags
+    const char* sql_note_tags = "DELETE FROM note_tags WHERE tag_id = ?";
+    sqlite3_stmt* stmt_note_tags;
+
+    if (sqlite3_prepare_v2(m_db, sql_note_tags, -1, &stmt_note_tags, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt_note_tags, 1, id);
+        sqlite3_step(stmt_note_tags); // Don't need to check result, just execute
+        sqlite3_finalize(stmt_note_tags);
+    } else {
+        return false; // Could not prepare statement
+    }
+
+    // Then, delete the tag itself
+    const char* sql_tags = "DELETE FROM tags WHERE id = ?";
+    sqlite3_stmt* stmt_tags;
+
+    if (sqlite3_prepare_v2(m_db, sql_tags, -1, &stmt_tags, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt_tags, 1, id);
+        bool success = (sqlite3_step(stmt_tags) == SQLITE_DONE);
+        sqlite3_finalize(stmt_tags);
+        return success;
+    }
+    return false;
+}
+
+bool Database::ReorderTag(int tagId, int newOrder) {
+    // This is a complex operation, for now we just update the order.
+    // A full implementation would shift other tags.
+    const char* sql = "UPDATE tags SET tag_order = ? WHERE id = ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, newOrder);
+        sqlite3_bind_int(stmt, 2, tagId);
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
+std::vector<Database::Tag> Database::GetNoteTags(int noteId) {
+    std::vector<Tag> tags;
+    const char* sql = "SELECT t.id, t.name, t.tag_order FROM tags t INNER JOIN note_tags nt ON t.id = nt.tag_id WHERE nt.note_id = ? ORDER BY t.tag_order";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, noteId);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            Tag tag;
+            tag.id = sqlite3_column_int(stmt, 0);
+            tag.name = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 1));
+            tag.order = sqlite3_column_int(stmt, 2);
+            tags.push_back(tag);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return tags;
+}
+
+bool Database::AddTagToNote(int noteId, int tagId) {
+    const char* sql = "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?, ?)";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, noteId);
+        sqlite3_bind_int(stmt, 2, tagId);
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
+bool Database::RemoveTagFromNote(int noteId, int tagId) {
+    const char* sql = "DELETE FROM note_tags WHERE note_id = ? AND tag_id = ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, noteId);
+        sqlite3_bind_int(stmt, 2, tagId);
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
+std::string Database::GetSetting(const std::string& key, const std::string& defaultValue) {
+    const char* sql = "SELECT value FROM settings WHERE key = ?";
+    sqlite3_stmt* stmt;
+    std::string value = defaultValue;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* val = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (val) value = val;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return value;
+}
+
+bool Database::SetSetting(const std::string& key, const std::string& value) {
+    const char* sql = "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, value.c_str(), -1, SQLITE_STATIC);
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
 
 void Database::Close() {
     if (m_db) {

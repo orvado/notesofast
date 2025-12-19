@@ -66,7 +66,7 @@ vcpkg install hunspell:x86-windows libiconv:x86-windows gettext-libintl:x86-wind
    build_msvc.bat
    ```
    
-   Or manually with NMAKE:
+   Or manually with NMAKE (ensure you use the `.nmake` file):
    ```cmd
    nmake /f Makefile.nmake
    ```

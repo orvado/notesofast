@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -Wall -std=c++17 -Iinclude -DUNICODE -D_UNICODE
+CXXFLAGS = -Wall -std=c++17 -Iinclude -Isrc -DUNICODE -D_UNICODE
 LDFLAGS = -mwindows -static-libgcc -static-libstdc++
 LIBS = -lcomctl32
 
@@ -9,12 +9,16 @@ VCPKG_TRIPLET ?= x64-windows
 CXXFLAGS += -I$(VCPKG_ROOT)/installed/$(VCPKG_TRIPLET)/include
 LIBS += -L$(VCPKG_ROOT)/installed/$(VCPKG_TRIPLET)/lib -lhunspell-1.7 -lintl -liconv
 
+RC = windres
+RCFLAGS = -Isrc
+
 SRC_DIR = src
 OBJ_DIR = build
 BIN_DIR = build
 
 SRCS = $(wildcard $(SRC_DIR)/*.cpp)
 OBJS = $(patsubst $(SRC_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(SRCS))
+OBJS += $(OBJ_DIR)/resource.o
 
 # Add sqlite3.c if it exists in lib/
 ifneq ("$(wildcard lib/sqlite3.c)","")
@@ -39,6 +43,10 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 $(OBJ_DIR)/sqlite3.o: lib/sqlite3.c
 	@if not exist $(OBJ_DIR) mkdir $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/resource.o: $(SRC_DIR)/resource.rc $(SRC_DIR)/resource.h
+	@if not exist $(OBJ_DIR) mkdir $(OBJ_DIR)
+	$(RC) $(RCFLAGS) -i $< -o $@
 
 clean:
 	del /Q $(OBJ_DIR)\*.o $(TARGET)
