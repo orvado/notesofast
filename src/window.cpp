@@ -733,7 +733,7 @@ void MainWindow::OnCreate() {
     int iMBold = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"B\0");
     int iMItalic = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"I\0");
     int iMStrike = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"S\0");
-    int iMPara = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Paragraph\0");
+    int iMPara = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Header\0");
     int iMQuote = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"\"\0");
     int iMOL = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"1. \x2014\0");
     int iMUL = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"\x2022 \x2014\0");
@@ -1893,12 +1893,8 @@ void MainWindow::RenderMarkdownPreview() {
             return;
         }
 
-        // Clamp: we only care about "has newline" vs "has blank line".
-        if (crlfPairs >= 2) {
-            endBreak = 2;
-        } else {
-            endBreak = (endBreak >= 2) ? 2 : 1;
-        }
+        // Clamp+accumulate: we only care about "has newline" vs "has blank line".
+        endBreak = (endBreak + crlfPairs >= 2) ? 2 : (endBreak + crlfPairs);
 
         SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
         InlineRun nl;
@@ -1988,10 +1984,11 @@ void MainWindow::RenderMarkdownPreview() {
             ApplyParaNormal(m_hwndPreview);
 
             if (IsHorizontalRule(trimmed)) {
-                std::wstring hr = L"----------------------------------------";
-                SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)(hr + L"\r\n").c_str());
+                // Use a box-drawing character so the rule looks like a solid line (no visible gaps).
+                std::wstring hr(72, L'\x2500'); // U+2500 BOX DRAWINGS LIGHT HORIZONTAL
+                SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)hr.c_str());
                 markTextEmitted();
-                endBreak = 1;
+                emitNewlines(1);
                 continue;
             }
 
@@ -2005,9 +2002,15 @@ void MainWindow::RenderMarkdownPreview() {
             if (headerLevel > 0 && i < trimmed.size() && trimmed[i] == L' ') {
                 std::wstring headerText = trimmed.substr(i + 1);
                 ApplyHeaderCharStyle(m_hwndPreview, headerLevel);
-                SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)(headerText + L"\r\n").c_str());
+
+                // Render header text and add a small bottom margin (one blank line) unless the
+                // markdown already has a blank line next.
+                SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)headerText.c_str());
                 markTextEmitted();
-                endBreak = 1;
+
+                // End the header line. If the user wants extra space, a blank line in the markdown
+                // will still produce it; otherwise keep the margin tight.
+                emitNewlines(1);
                 continue;
             }
 

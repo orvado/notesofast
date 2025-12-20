@@ -24,8 +24,8 @@ static std::wstring ResolveDatabasePath() {
     };
 
     std::wstring candidates[] = {
-        exeDir + L"\\notes.db",
-        exeDir + L"\\..\\notes.db"
+        exeDir + L"\\notesofast.db",
+        exeDir + L"\\..\\notesofast.db"
     };
 
     for (const auto& candidate : candidates) {
