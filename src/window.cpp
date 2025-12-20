@@ -84,6 +84,13 @@ MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdi
     m_hwndRemoveItem(NULL), m_hwndMoveUp(NULL), m_hwndMoveDown(NULL), m_db(db) {
     m_colors = m_db->GetColors();
     m_searchHistory = m_db->GetSearchHistory();
+
+    std::string selectedTagStr = m_db->GetSetting("SelectedTagId", "-1");
+    try {
+        m_selectedTagId = std::stoi(selectedTagStr);
+    } catch (...) {
+        m_selectedTagId = -1;
+    }
 }
 
 MainWindow::~MainWindow() {
@@ -191,6 +198,8 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             CreateNewNote();
             break;
         case 2: // Ctrl+S
+            // Debug: Show global Ctrl+S was triggered
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Global Ctrl+S hotkey triggered");
             SaveCurrentNote();
             break;
         case 3: // Ctrl+D
@@ -395,6 +404,41 @@ void MainWindow::OnCreate() {
 
     SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 3, (LPARAM)&tbbFormat);
 
+    // Add Tag Filter
+    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 1, (LPARAM)&tbbSep);
+    
+    int iTagLabel = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)L"Tag:\0");
+    
+    std::wstring tagButtonText = L"<None>";
+    if (m_selectedTagId != -1) {
+        std::vector<Database::Tag> tags = m_db->GetTags();
+        for (const auto& tag : tags) {
+            if (tag.id == m_selectedTagId) {
+                tagButtonText = tag.name;
+                break;
+            }
+        }
+    }
+    tagButtonText += L"\0";
+    int iTagValue = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)tagButtonText.c_str());
+    
+    TBBUTTON tbbTag[2];
+    ZeroMemory(tbbTag, sizeof(tbbTag));
+    
+    tbbTag[0].iBitmap = I_IMAGENONE;
+    tbbTag[0].idCommand = IDM_TAG_FILTER_LABEL;
+    tbbTag[0].fsState = TBSTATE_ENABLED;
+    tbbTag[0].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+    tbbTag[0].iString = iTagLabel;
+    
+    tbbTag[1].iBitmap = I_IMAGENONE;
+    tbbTag[1].idCommand = IDM_TAG_FILTER_BUTTON;
+    tbbTag[1].fsState = TBSTATE_ENABLED;
+    tbbTag[1].fsStyle = BTNS_DROPDOWN | BTNS_AUTOSIZE;
+    tbbTag[1].iString = iTagValue;
+    
+    SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 2, (LPARAM)&tbbTag);
+
     // Create Markdown Toolbar (initially hidden or shown depending on mode)
     m_hwndMarkdownToolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL, 
         WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | TBSTYLE_LIST | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, 
@@ -570,7 +614,7 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         CreateNewNote();
         break;
     case IDM_SAVE:
-        ExportCurrentNote();
+        SaveCurrentNote();
         break;
     case IDM_PRINT:
         PrintCurrentNote();
@@ -650,6 +694,31 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_SETTINGS:
         CreateSettingsDialog(m_hwnd, m_db);
         break;
+    case IDM_TAG_FILTER_BUTTON:
+        {
+            RECT rc;
+            SendMessage(m_hwndToolbar, TB_GETRECT, IDM_TAG_FILTER_BUTTON, (LPARAM)&rc);
+            MapWindowPoints(m_hwndToolbar, NULL, (LPPOINT)&rc, 2);
+            
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenu(hMenu, MF_STRING, IDM_TAG_NONE, L"<None>");
+            
+            std::vector<Database::Tag> tags = m_db->GetTags();
+            std::map<int, int> counts = m_db->GetTagUsageCounts();
+            
+            for (const auto& tag : tags) {
+                int count = 0;
+                if (counts.find(tag.id) != counts.end()) {
+                    count = counts[tag.id];
+                }
+                std::wstring itemText = tag.name + L" (" + std::to_wstring(count) + L")";
+                AppendMenu(hMenu, MF_STRING, IDM_TAG_MENU_BASE + tag.id, itemText.c_str());
+            }
+            
+            TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, m_hwnd, NULL);
+            DestroyMenu(hMenu);
+        }
+        break;
     case IDM_MARKDOWN_BOLD:
         ApplyMarkdown(L"**", L"**");
         break;
@@ -724,7 +793,16 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         break;
     case ID_RICHEDIT:
         if (HIWORD(wParam) == EN_CHANGE) {
+            // If nothing is selected and we're editing a blank buffer, treat it as a new note for the current tag filter.
+            if (!m_isNewNote && m_currentNoteId == -1) {
+                m_isNewNote = true;
+                m_newNoteTagId = m_selectedTagId;
+                SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Entering new note mode for current tag filter");
+            }
+
             m_isDirty = true;
+            // Debug: Show that EN_CHANGE fired
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"EN_CHANGE: m_isDirty set to true");
             UpdateWindowTitle();
             ScheduleSpellCheck();
         }
@@ -761,6 +839,50 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     if (LOWORD(wParam) >= IDM_COLOR_BASE && LOWORD(wParam) < IDM_COLOR_BASE + 100) {
         SetCurrentNoteColor(LOWORD(wParam) - IDM_COLOR_BASE);
     }
+
+    // Handle Tag Filter Commands
+    if (LOWORD(wParam) >= IDM_TAG_MENU_BASE && LOWORD(wParam) < IDM_TAG_MENU_BASE + 1000) {
+        int tagId = LOWORD(wParam) - IDM_TAG_MENU_BASE;
+        if (LOWORD(wParam) == IDM_TAG_NONE) tagId = -1;
+
+        if (m_selectedTagId != tagId) {
+            int oldNewNoteTag = m_newNoteTagId;
+            int oldSelectedTag = m_selectedTagId;
+
+            if (!PromptToSaveIfDirty(-1, false)) {
+                m_newNoteTagId = oldNewNoteTag; // restore if cancelled
+                m_selectedTagId = oldSelectedTag;
+                return;
+            }
+            
+            m_selectedTagId = tagId;
+            m_db->SetSetting("SelectedTagId", std::to_string(tagId));
+        }
+        
+        // Update button text
+        std::wstring tagButtonText = L"<None>";
+        if (tagId != -1) {
+            std::vector<Database::Tag> tags = m_db->GetTags();
+            for (const auto& tag : tags) {
+                if (tag.id == tagId) {
+                    tagButtonText = tag.name;
+                    break;
+                }
+            }
+        }
+        
+        TBBUTTONINFO tbbi;
+        tbbi.cbSize = sizeof(TBBUTTONINFO);
+        tbbi.dwMask = TBIF_TEXT;
+        tbbi.pszText = (LPWSTR)tagButtonText.c_str();
+        SendMessage(m_hwndToolbar, TB_SETBUTTONINFO, IDM_TAG_FILTER_BUTTON, (LPARAM)&tbbi);
+        
+        // Reload notes list
+        int len = GetWindowTextLength(m_hwndSearch);
+        std::vector<wchar_t> buf(len + 1);
+        GetWindowText(m_hwndSearch, &buf[0], len + 1);
+        LoadNotesList(&buf[0], m_searchTitleOnly, true);
+    }
 }
 
 LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
@@ -780,7 +902,7 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
         pInfo->hinst = NULL;
         switch (pInfo->hdr.idFrom) {
             case IDM_NEW: wcscpy_s(pInfo->szText, L"New Note (Ctrl+N)"); break;
-            case IDM_SAVE: wcscpy_s(pInfo->szText, L"Export to Text (Ctrl+S)"); break;
+            case IDM_SAVE: wcscpy_s(pInfo->szText, L"Save Note (Ctrl+S)"); break;
             case IDM_PRINT: wcscpy_s(pInfo->szText, L"Print Note"); break;
             case IDM_DELETE: wcscpy_s(pInfo->szText, L"Delete (Ctrl+D)"); break;
             case IDM_PIN: wcscpy_s(pInfo->szText, L"Pin Note (Ctrl+P)"); break;
@@ -795,6 +917,8 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             case IDM_HIST_FORWARD: wcscpy_s(pInfo->szText, L"Forward in history"); break;
             case IDM_SEARCH_MODE_TOGGLE: wcscpy_s(pInfo->szText, L"Search Title and Content"); break;
             case IDM_SETTINGS: wcscpy_s(pInfo->szText, L"Settings"); break;
+            case IDM_TAG_FILTER_LABEL: wcscpy_s(pInfo->szText, L"Filter by Tag"); break;
+            case IDM_TAG_FILTER_BUTTON: wcscpy_s(pInfo->szText, L"Select Tag to Filter"); break;
             case IDM_MARKDOWN_BOLD: wcscpy_s(pInfo->szText, L"Bold"); break;
             case IDM_MARKDOWN_ITALIC: wcscpy_s(pInfo->szText, L"Italic"); break;
             case IDM_MARKDOWN_STRIKE: wcscpy_s(pInfo->szText, L"Strikethrough"); break;
@@ -835,6 +959,29 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, m_hwnd, NULL);
             DestroyMenu(hMenu);
             return TBDDRET_DEFAULT;
+        } else if (lpnmtb->iItem == IDM_TAG_FILTER_BUTTON) {
+            RECT rc;
+            SendMessage(m_hwndToolbar, TB_GETRECT, IDM_TAG_FILTER_BUTTON, (LPARAM)&rc);
+            MapWindowPoints(m_hwndToolbar, NULL, (LPPOINT)&rc, 2);
+            
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenu(hMenu, MF_STRING, IDM_TAG_NONE, L"<None>");
+            
+            std::vector<Database::Tag> tags = m_db->GetTags();
+            std::map<int, int> counts = m_db->GetTagUsageCounts();
+            
+            for (const auto& tag : tags) {
+                int count = 0;
+                if (counts.find(tag.id) != counts.end()) {
+                    count = counts[tag.id];
+                }
+                std::wstring itemText = tag.name + L" (" + std::to_wstring(count) + L")";
+                AppendMenu(hMenu, MF_STRING, IDM_TAG_MENU_BASE + tag.id, itemText.c_str());
+            }
+            
+            TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, m_hwnd, NULL);
+            DestroyMenu(hMenu);
+            return TBDDRET_DEFAULT;
         }
     }
 
@@ -867,6 +1014,7 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
         }
     } else if (pnmh->idFrom == ID_LISTVIEW) {
         if (pnmh->code == LVN_ITEMCHANGED) {
+            if (m_isReloading) return 0;
             LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
             if ((pnmv->uChanged & LVIF_STATE) && (pnmv->uNewState & LVIS_SELECTED)) {
                 int targetNoteId = -1;
@@ -1049,6 +1197,7 @@ void MainWindow::UnregisterHotkeys() {
 }
 
 void MainWindow::LoadNotesList(const std::wstring& filter, bool titleOnly, bool autoSelectFirst, int selectNoteId) {
+    m_isReloading = true;
     ListView_DeleteAllItems(m_hwndList);
     m_notes = m_db->GetAllNotes(m_showArchived, m_sortBy);
     m_filteredIndices.clear();
@@ -1068,7 +1217,20 @@ void MainWindow::LoadNotesList(const std::wstring& filter, bool titleOnly, bool 
         std::wstring wContent = Utils::Utf8ToWide(m_notes[i].content);
         
         bool match = true;
-        if (!filter.empty()) {
+
+        if (m_selectedTagId != -1) {
+            std::vector<Database::Tag> noteTags = m_db->GetNoteTags(m_notes[i].id);
+            bool hasTag = false;
+            for (const auto& tag : noteTags) {
+                if (tag.id == m_selectedTagId) {
+                    hasTag = true;
+                    break;
+                }
+            }
+            if (!hasTag) match = false;
+        }
+
+        if (match && !filter.empty()) {
             // Simple case-insensitive search
             std::wstring wTitleLower = wTitle;
             std::wstring wContentLower = wContent;
@@ -1128,6 +1290,8 @@ void MainWindow::LoadNotesList(const std::wstring& filter, bool titleOnly, bool 
             LoadNoteContent(-1);
         }
     }
+
+    m_isReloading = false;
 }
 
 void MainWindow::LoadNoteContent(int listIndex) {
@@ -1135,9 +1299,19 @@ void MainWindow::LoadNoteContent(int listIndex) {
         int realIndex = m_filteredIndices[listIndex];
         m_isNewNote = false;
         m_currentNoteIndex = realIndex;
+        m_currentNoteId = m_notes[realIndex].id;
+        m_lastCurrentNoteId = m_currentNoteId;
         std::wstring wContent = Utils::Utf8ToWide(m_notes[realIndex].content);
-        SetWindowText(m_hwndEdit, wContent.c_str());
-        ResetWordUndoState();
+        
+        // Only update editor if content is different to preserve cursor/undo
+        int len = GetWindowTextLength(m_hwndEdit);
+        std::vector<wchar_t> currentBuf(len + 1);
+        GetWindowText(m_hwndEdit, &currentBuf[0], len + 1);
+        if (wContent != &currentBuf[0]) {
+            SetWindowText(m_hwndEdit, wContent.c_str());
+            ResetWordUndoState();
+        }
+
         m_isDirty = false;
         
         // Update Toolbar State
@@ -1163,6 +1337,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         ScheduleSpellCheck();
     } else {
         m_currentNoteIndex = -1;
+        m_currentNoteId = -1;
         SetWindowText(m_hwndEdit, L"");
         ResetWordUndoState();
         m_isDirty = false;
@@ -1207,22 +1382,84 @@ void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfter
         newNote.content = content;
 
         if (m_db->CreateNote(newNote)) {
+            // Prefer the tag that was active when the note was created; fall back to the current filter if needed.
+            int tagToApply = (m_newNoteTagId != -1) ? m_newNoteTagId : m_selectedTagId;
+            
+            if (tagToApply != -1) {
+                m_db->AddTagToNote(newNote.id, tagToApply);
+            }
+            
             m_isDirty = false;
             m_isNewNote = false;
+            m_newNoteTagId = -1;
             SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Note saved");
-            LoadNotesList(m_currentSearchFilter, m_searchTitleOnly, autoSelectAfterSave, preferredSelectNoteId == -1 ? newNote.id : preferredSelectNoteId);
+            
+            // Clear search and reload list to show the new note
+            SetWindowText(m_hwndSearch, L"");
+            m_currentSearchFilter = L"";
+            
+            // Ensure the filter matches the tag we applied so the note will be visible
+            if (tagToApply != -1) {
+                m_selectedTagId = tagToApply;
+                m_db->SetSetting("SelectedTagId", std::to_string(tagToApply));
+            }
+            
+            // Reload with empty filter but current tag will be applied
+            LoadNotesList(L"", false, autoSelectAfterSave, newNote.id);
+            
             UpdateWindowTitle();
+        } else {
+            wchar_t errMsg[256];
+            swprintf_s(errMsg, 256, L"ERROR: Failed to create note");
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)errMsg);
         }
         return;
     }
 
-    if (m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size() && m_isDirty) {
+    if (m_isDirty) {
+        int noteIdToSave = -1;
+        int noteIndexToSave = -1;
+
+        if (m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size()) {
+            noteIdToSave = m_notes[m_currentNoteIndex].id;
+            noteIndexToSave = m_currentNoteIndex;
+            m_currentNoteId = noteIdToSave;
+            m_lastCurrentNoteId = noteIdToSave;
+        } else if (m_currentNoteId != -1) {
+            noteIdToSave = m_currentNoteId;
+            for (int idx = 0; idx < (int)m_notes.size(); ++idx) {
+                if (m_notes[idx].id == noteIdToSave) {
+                    noteIndexToSave = idx;
+                    break;
+                }
+            }
+        }
+
+        // If still no note to save, try the last current note (in case it was filtered out)
+        if (noteIdToSave == -1 && m_lastCurrentNoteId != -1) {
+            noteIdToSave = m_lastCurrentNoteId;
+            for (int idx = 0; idx < (int)m_notes.size(); ++idx) {
+                if (m_notes[idx].id == noteIdToSave) {
+                    noteIndexToSave = idx;
+                    break;
+                }
+            }
+        }
+
+        if (noteIdToSave == -1) {
+            // No known note to save.
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"ERROR: No note to save");
+            return;
+        }
+
         int len = GetWindowTextLength(m_hwndEdit);
         std::vector<wchar_t> buf(len + 1);
         GetWindowText(m_hwndEdit, &buf[0], len + 1);
         
         std::string content = Utils::WideToUtf8(&buf[0]);
-        m_notes[m_currentNoteIndex].content = content;
+        if (noteIndexToSave != -1) {
+            m_notes[noteIndexToSave].content = content;
+        }
         
         // Update title from first line
         size_t firstLineEnd = content.find('\n');
@@ -1246,19 +1483,39 @@ void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfter
             newTitle = newTitle.substr(0, 50) + "...";
         }
         
-        m_notes[m_currentNoteIndex].title = newTitle;
-        
-        m_db->UpdateNote(m_notes[m_currentNoteIndex]);
-        m_isDirty = false;
-        SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Note saved");
+        Note updateNote;
+        updateNote.id = noteIdToSave;
+        updateNote.title = newTitle;
+        updateNote.content = content;
+
+        if (noteIndexToSave != -1) {
+            m_notes[noteIndexToSave].title = newTitle;
+        }
+
+        if (m_db->UpdateNote(updateNote)) {
+            m_isDirty = false;
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Note saved");
+        } else {
+            wchar_t errMsg[256];
+            swprintf_s(errMsg, 256, L"ERROR: Failed to update note %d", noteIdToSave);
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)errMsg);
+        }
         
         // Update list item text
-        for(int i=0; i<(int)m_filteredIndices.size(); ++i) {
-            if (m_filteredIndices[i] == m_currentNoteIndex) {
-                std::wstring wTitle = Utils::Utf8ToWide(m_notes[m_currentNoteIndex].title);
+        bool updatedListItem = false;
+        for (int i = 0; i < (int)m_filteredIndices.size(); ++i) {
+            int realIndex = m_filteredIndices[i];
+            if (realIndex >= 0 && realIndex < (int)m_notes.size() && m_notes[realIndex].id == noteIdToSave) {
+                std::wstring wTitle = Utils::Utf8ToWide(newTitle);
                 ListView_SetItemText(m_hwndList, i, 0, (LPWSTR)wTitle.c_str());
+                updatedListItem = true;
                 break;
             }
+        }
+
+        // If the note isn't in the current filtered list, reload and try to keep selection.
+        if (!updatedListItem) {
+            LoadNotesList(m_currentSearchFilter, m_searchTitleOnly, autoSelectAfterSave, noteIdToSave);
         }
         
         UpdateWindowTitle();
@@ -1270,8 +1527,11 @@ void MainWindow::CreateNewNote() {
 
     m_isNewNote = true;
     m_currentNoteIndex = -1;
+    m_currentNoteId = -1;
+    m_lastCurrentNoteId = -1;
     m_isDirty = false;
     m_checklistMode = false;
+    m_newNoteTagId = m_selectedTagId; // Capture the current tag filter
 
     // Clear selection and editor
     ListView_SetItemState(m_hwndList, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
@@ -1841,12 +2101,14 @@ void MainWindow::RunSpellCheck() {
 }
 
 bool MainWindow::PromptToSaveIfDirty(int preferredSelectNoteId, bool autoSelectAfterSave) {
-    if (!m_isDirty) {
+    // Handle new dirty notes
+    if (m_isNewNote && m_isDirty) {
+        SaveCurrentNote(preferredSelectNoteId, autoSelectAfterSave);
         return true;
     }
 
-    if (m_isNewNote) {
-        SaveCurrentNote(preferredSelectNoteId, autoSelectAfterSave);
+    // No unsaved changes
+    if (!m_isDirty) {
         return true;
     }
 
@@ -1891,6 +2153,13 @@ LRESULT CALLBACK MainWindow::RichEditSubclassProc(HWND hwnd, UINT uMsg, WPARAM w
                 if (self->PerformWordRedo()) {
                     return 0;
                 }
+            } else if (wParam == 'S') {
+                // Ensure Ctrl+S saves even if the global hotkey is missed.
+                self->FinalizeCurrentWord();
+                // Debug: Show Ctrl+S was pressed
+                SendMessage(self->m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Ctrl+S pressed in RichEdit");
+                self->SaveCurrentNote();
+                return 0;
             }
         } else if (wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_UP || wParam == VK_DOWN ||
                    wParam == VK_HOME || wParam == VK_END || wParam == VK_SPACE || wParam == VK_TAB ||

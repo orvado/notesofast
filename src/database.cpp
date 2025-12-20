@@ -138,12 +138,19 @@ bool Database::CreateNote(Note& note) {
         sqlite3_bind_text(stmt, 1, note.title.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 2, note.content.c_str(), -1, SQLITE_STATIC);
 
-        if (sqlite3_step(stmt) == SQLITE_DONE) {
+        int result = sqlite3_step(stmt);
+        if (result == SQLITE_DONE) {
             note.id = (int)sqlite3_last_insert_rowid(m_db);
             sqlite3_finalize(stmt);
             return true;
+        } else {
+            // Debug: Show the error
+            const char* errMsg = sqlite3_errmsg(m_db);
+            fprintf(stderr, "CreateNote failed: %s (result=%d)\n", errMsg, result);
+            sqlite3_finalize(stmt);
         }
-        sqlite3_finalize(stmt);
+    } else {
+        fprintf(stderr, "CreateNote prepare failed: %s\n", sqlite3_errmsg(m_db));
     }
     return false;
 }
@@ -157,11 +164,18 @@ bool Database::UpdateNote(const Note& note) {
         sqlite3_bind_text(stmt, 2, note.content.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_int(stmt, 3, note.id);
 
-        if (sqlite3_step(stmt) == SQLITE_DONE) {
+        int result = sqlite3_step(stmt);
+        if (result == SQLITE_DONE) {
             sqlite3_finalize(stmt);
             return true;
+        } else {
+            // Debug: Show the error
+            const char* errMsg = sqlite3_errmsg(m_db);
+            fprintf(stderr, "UpdateNote failed: note.id=%d, %s (result=%d)\n", note.id, errMsg, result);
+            sqlite3_finalize(stmt);
         }
-        sqlite3_finalize(stmt);
+    } else {
+        fprintf(stderr, "UpdateNote prepare failed: %s\n", sqlite3_errmsg(m_db));
     }
     return false;
 }
@@ -530,6 +544,22 @@ std::vector<Database::Tag> Database::GetTags() {
     return tags;
 }
 
+std::map<int, int> Database::GetTagUsageCounts() {
+    std::map<int, int> counts;
+    const char* sql = "SELECT tag_id, COUNT(*) FROM note_tags GROUP BY tag_id";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            int tagId = sqlite3_column_int(stmt, 0);
+            int count = sqlite3_column_int(stmt, 1);
+            counts[tagId] = count;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return counts;
+}
+
 bool Database::CreateTag(Tag& tag) {
     const char* sql = "INSERT INTO tags (name, tag_order) VALUES (?, ?)";
     sqlite3_stmt* stmt;
@@ -631,9 +661,16 @@ bool Database::AddTagToNote(int noteId, int tagId) {
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, noteId);
         sqlite3_bind_int(stmt, 2, tagId);
-        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        int result = sqlite3_step(stmt);
+        bool success = (result == SQLITE_DONE);
+        if (!success) {
+            fprintf(stderr, "AddTagToNote failed: noteId=%d, tagId=%d, result=%d, error=%s\n", 
+                noteId, tagId, result, sqlite3_errmsg(m_db));
+        }
         sqlite3_finalize(stmt);
         return success;
+    } else {
+        fprintf(stderr, "AddTagToNote prepare failed: %s\n", sqlite3_errmsg(m_db));
     }
     return false;
 }

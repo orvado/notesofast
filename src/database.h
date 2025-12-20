@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <map>
 #include "sqlite3.h"
 #include "note.h"
 
@@ -56,6 +57,7 @@ public:
 
     // Tag methods
     std::vector<Tag> GetTags();
+    std::map<int, int> GetTagUsageCounts();
     bool CreateTag(Tag& tag);
     bool UpdateTag(const Tag& tag);
     bool DeleteTag(int id);

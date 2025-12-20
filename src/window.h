@@ -88,10 +88,15 @@ protected:
     std::vector<int> m_filteredIndices; // Indices into m_notes
     std::vector<Database::Color> m_colors;
     int m_currentNoteIndex = -1;
+    int m_currentNoteId = -1;
+    int m_lastCurrentNoteId = -1;
     bool m_isDirty = false;
     bool m_showArchived = false;
     Database::SortBy m_sortBy = Database::SortBy::DateModified;
     bool m_checklistMode = false;
+    int m_selectedTagId = -1; // -1 for <None>
+    int m_newNoteTagId = -1; // Tag to apply when saving a new note
+    bool m_isReloading = false;
 
     int m_splitPos = 250;
     bool m_isDraggingSplitter = false;

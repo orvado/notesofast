@@ -37,6 +37,8 @@
 
 // Toolbar
 #define IDM_SETTINGS 3001
+#define IDM_TAG_FILTER_LABEL 3002
+#define IDM_TAG_FILTER_BUTTON 3003
 #define IDI_SETTINGS 4001
 
 // Markdown Toolbar
@@ -61,3 +63,7 @@
 #define IDM_MARKDOWN_UNDO 5015
 #define IDM_MARKDOWN_REDO 5016
 #define IDM_MARKDOWN_PARA 5017
+
+// Tag Menu
+#define IDM_TAG_MENU_BASE 6000
+#define IDM_TAG_NONE 6000
