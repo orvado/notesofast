@@ -18,6 +18,7 @@ public:
     
     // Public for window procedure callbacks
     void NavigateSearchHistory(int offset);
+    void SetDatabasePath(const std::wstring& path);
 
 protected:
     virtual LRESULT HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -35,6 +36,7 @@ protected:
 
     void LoadNotesList(const std::wstring& filter = L"", bool titleOnly = false, bool autoSelectFirst = true, int selectNoteId = -1);
     void LoadNoteContent(int index);
+    void PersistLastViewedNote();
     void SaveCurrentNote(int preferredSelectNoteId = -1, bool autoSelectAfterSave = true);
     void CreateNewNote();
     void DeleteCurrentNote();
@@ -69,6 +71,8 @@ protected:
     void ShowSettingsDialog();
     void ApplyMarkdown(const std::wstring& prefix, const std::wstring& suffix);
     void ApplyLineMarkdown(const std::wstring& prefix, bool sequential = false);
+    void UpdateStatusBarDbInfo();
+    void UpdateStatusBarParts(int statusWidth);
 
     HWND m_hwnd;
     HWND m_hwndList;
@@ -91,6 +95,7 @@ protected:
     int m_currentNoteIndex = -1;
     int m_currentNoteId = -1;
     int m_lastCurrentNoteId = -1;
+    int m_lastViewedNoteId = -1;
     bool m_isDirty = false;
     bool m_showArchived = false;
     Database::SortBy m_sortBy = Database::SortBy::DateModified;
@@ -113,6 +118,9 @@ protected:
     bool m_navigatingHistory = false;
     bool m_isNewNote = false;
     bool m_spellCheckDeferred = false;   // Selection active; rerun once selection clears
+    bool m_statusPartsConfigured = false;
+    bool m_dbInfoNeedsRefresh = false;
+    std::wstring m_dbPath;
     
     // Search history
     std::vector<std::string> m_searchHistory;

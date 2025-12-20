@@ -8,6 +8,25 @@
 #include <algorithm>
 #include <memory>
 #include <cwctype>
+#include <cwchar>
+
+static std::wstring FormatFileSize(ULONGLONG bytes) {
+    wchar_t buffer[64] = {0};
+    const double KB = 1024.0;
+    const double MB = KB * 1024.0;
+    const double GB = MB * 1024.0;
+    const size_t bufferSize = sizeof(buffer) / sizeof(buffer[0]);
+    if (bytes >= (ULONGLONG)GB) {
+        swprintf_s(buffer, bufferSize, L"%.1f GB", bytes / GB);
+    } else if (bytes >= (ULONGLONG)MB) {
+        swprintf_s(buffer, bufferSize, L"%.1f MB", bytes / MB);
+    } else if (bytes >= (ULONGLONG)KB) {
+        swprintf_s(buffer, bufferSize, L"%.0f KB", bytes / KB);
+    } else {
+        swprintf_s(buffer, bufferSize, L"%llu bytes", bytes);
+    }
+    return std::wstring(buffer);
+}
 
 #ifdef max
 #undef max
@@ -98,6 +117,14 @@ MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdi
         m_selectedTagId = std::stoi(selectedTagStr);
     } catch (...) {
         m_selectedTagId = -1;
+    }
+
+    std::string lastViewedStr = m_db->GetSetting("LastViewedNoteId", "-1");
+    try {
+        int parsed = std::stoi(lastViewedStr);
+        m_lastViewedNoteId = parsed;
+    } catch (...) {
+        m_lastViewedNoteId = -1;
     }
 }
 
@@ -314,71 +341,71 @@ void MainWindow::OnCreate() {
     tbb[1].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[1].iString = -1;
 
-    tbb[2].iBitmap = stdIdx + STD_PROPERTIES;
-    tbb[2].idCommand = IDM_SETTINGS;
+    tbb[2].iBitmap = stdIdx + STD_DELETE;
+    tbb[2].idCommand = IDM_DELETE;
     tbb[2].fsState = TBSTATE_ENABLED;
     tbb[2].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[2].iString = iSettings;
+    tbb[2].iString = -1;
 
-    tbb[3].iBitmap = stdIdx + STD_DELETE;
-    tbb[3].idCommand = IDM_DELETE;
+    tbb[3].iBitmap = viewIdx + 6; // VIEW_SORTDATE
+    tbb[3].idCommand = IDM_SORT;
     tbb[3].fsState = TBSTATE_ENABLED;
     tbb[3].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[3].iString = -1;
 
-    tbb[4].iBitmap = viewIdx + 6; // VIEW_SORTDATE
-    tbb[4].idCommand = IDM_SORT;
+    tbb[4].iBitmap = histIdx + HIST_BACK;
+    tbb[4].idCommand = IDM_HIST_BACK;
     tbb[4].fsState = TBSTATE_ENABLED;
     tbb[4].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[4].iString = -1;
 
-    tbb[5].iBitmap = histIdx + HIST_BACK;
-    tbb[5].idCommand = IDM_HIST_BACK;
+    tbb[5].iBitmap = histIdx + HIST_FORWARD;
+    tbb[5].idCommand = IDM_HIST_FORWARD;
     tbb[5].fsState = TBSTATE_ENABLED;
     tbb[5].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[5].iString = -1;
 
-    tbb[6].iBitmap = histIdx + HIST_FORWARD;
-    tbb[6].idCommand = IDM_HIST_FORWARD;
+    tbb[6].iBitmap = I_IMAGENONE;
+    tbb[6].idCommand = IDM_SEARCH_MODE_TOGGLE;
     tbb[6].fsState = TBSTATE_ENABLED;
-    tbb[6].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[6].iString = -1;
+    tbb[6].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
+    tbb[6].iString = iTC;
 
-    tbb[7].iBitmap = I_IMAGENONE;
-    tbb[7].idCommand = IDM_SEARCH_MODE_TOGGLE;
+    tbb[7].iBitmap = stdIdx + STD_PRINT;
+    tbb[7].idCommand = IDM_PRINT;
     tbb[7].fsState = TBSTATE_ENABLED;
-    tbb[7].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[7].iString = iTC;
+    tbb[7].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+    tbb[7].iString = -1;
 
-    tbb[8].iBitmap = stdIdx + STD_PRINT;
-    tbb[8].idCommand = IDM_PRINT;
+    tbb[8].iBitmap = histIdx + HIST_FAVORITES;
+    tbb[8].idCommand = IDM_PIN;
     tbb[8].fsState = TBSTATE_ENABLED;
-    tbb[8].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+    tbb[8].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[8].iString = -1;
 
-    tbb[9].iBitmap = histIdx + HIST_FAVORITES;
-    tbb[9].idCommand = IDM_PIN;
+    tbb[9].iBitmap = stdIdx + STD_FILEOPEN; // Using File Open (folder) for Archive
+    tbb[9].idCommand = IDM_ARCHIVE;
     tbb[9].fsState = TBSTATE_ENABLED;
     tbb[9].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[9].iString = -1;
 
-    tbb[10].iBitmap = stdIdx + STD_FILEOPEN; // Using File Open (folder) for Archive
-    tbb[10].idCommand = IDM_ARCHIVE;
+    tbb[10].iBitmap = viewIdx + 8; // VIEW_PARENTFOLDER
+    tbb[10].idCommand = IDM_SHOW_ARCHIVED;
     tbb[10].fsState = TBSTATE_ENABLED;
     tbb[10].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[10].iString = -1;
 
-    tbb[11].iBitmap = viewIdx + 8; // VIEW_PARENTFOLDER
-    tbb[11].idCommand = IDM_SHOW_ARCHIVED;
+    tbb[11].iBitmap = viewIdx + 2; // VIEW_LIST
+    tbb[11].idCommand = IDM_TOGGLE_CHECKLIST;
     tbb[11].fsState = TBSTATE_ENABLED;
     tbb[11].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
     tbb[11].iString = -1;
 
-    tbb[12].iBitmap = viewIdx + 2; // VIEW_LIST
-    tbb[12].idCommand = IDM_TOGGLE_CHECKLIST;
+    tbb[12].iBitmap = stdIdx + STD_PROPERTIES;
+    tbb[12].idCommand = IDM_SETTINGS;
     tbb[12].fsState = TBSTATE_ENABLED;
-    tbb[12].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE;
-    tbb[12].iString = -1;
+    tbb[12].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+    tbb[12].iString = iSettings;
 
     SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 13, (LPARAM)&tbb);
     
@@ -560,16 +587,23 @@ void MainWindow::OnCreate() {
     m_spellChecker = std::make_unique<SpellChecker>();
     m_spellChecker->Initialize(affPath, dicPath);
 
-    LoadNotesList();
+    LoadNotesList(L"", false, true, m_lastViewedNoteId);
 }
 
 void MainWindow::OnSize(int width, int height) {
-    // Resize Status Bar
-    SendMessage(m_hwndStatus, WM_SIZE, 0, 0);
-    
-    RECT rcStatus;
-    GetWindowRect(m_hwndStatus, &rcStatus);
-    int statusHeight = rcStatus.bottom - rcStatus.top;
+    int statusHeight = 0;
+    if (m_hwndStatus) {
+        // Resize Status Bar
+        SendMessage(m_hwndStatus, WM_SIZE, 0, 0);
+        UpdateStatusBarParts(width);
+        if (m_dbInfoNeedsRefresh) {
+            UpdateStatusBarDbInfo();
+        }
+
+        RECT rcStatus;
+        GetWindowRect(m_hwndStatus, &rcStatus);
+        statusHeight = rcStatus.bottom - rcStatus.top;
+    }
 
     // Resize Toolbar
     SendMessage(m_hwndToolbar, TB_AUTOSIZE, 0, 0);
@@ -630,6 +664,53 @@ void MainWindow::OnSize(int width, int height) {
         }
         int margin = MulDiv(5, dpi, 96);
         SendMessage(m_hwndEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(margin, margin));
+    }
+}
+
+void MainWindow::UpdateStatusBarParts(int statusWidth) {
+    if (!m_hwndStatus || statusWidth <= 0) {
+        return;
+    }
+
+    const int minPaneWidth = 200;
+    int paneMax = std::max(statusWidth - 100, 0);
+    int desiredWidth = statusWidth / 3;
+    int paneWidth = std::min(std::max(desiredWidth, minPaneWidth), paneMax);
+    if (paneWidth <= 0) {
+        paneWidth = statusWidth;
+    }
+
+    int parts[2] = { std::max(statusWidth - paneWidth, 0), -1 };
+    SendMessage(m_hwndStatus, SB_SETPARTS, 2, (LPARAM)parts);
+    m_statusPartsConfigured = true;
+}
+
+void MainWindow::UpdateStatusBarDbInfo() {
+    if (!m_hwndStatus || !m_statusPartsConfigured) {
+        return;
+    }
+
+    std::wstring dbInfo;
+    if (!m_dbPath.empty()) {
+        WIN32_FILE_ATTRIBUTE_DATA fileInfo = {};
+        std::wstring sizeText = L"Unknown size";
+        if (GetFileAttributesEx(m_dbPath.c_str(), GetFileExInfoStandard, &fileInfo)) {
+            ULONGLONG bytes = ((ULONGLONG)fileInfo.nFileSizeHigh << 32) | fileInfo.nFileSizeLow;
+            sizeText = FormatFileSize(bytes);
+        }
+
+        dbInfo = L"DB: " + m_dbPath + L" (" + sizeText + L")";
+    }
+
+    SendMessage(m_hwndStatus, SB_SETTEXT, 1, (LPARAM)dbInfo.c_str());
+    m_dbInfoNeedsRefresh = false;
+}
+
+void MainWindow::SetDatabasePath(const std::wstring& path) {
+    m_dbPath = path;
+    m_dbInfoNeedsRefresh = true;
+    if (m_statusPartsConfigured) {
+        UpdateStatusBarDbInfo();
     }
 }
 
@@ -1365,6 +1446,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         m_currentNoteId = m_notes[realIndex].id;
         m_lastCurrentNoteId = m_currentNoteId;
         m_currentNoteTagId = -2; // Reset pending tag change
+        PersistLastViewedNote();
         std::wstring wContent = Utils::Utf8ToWide(m_notes[realIndex].content);
         
         // Only update editor if content is different to preserve cursor/undo
@@ -1403,6 +1485,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
     } else {
         m_currentNoteIndex = -1;
         m_currentNoteId = -1;
+        PersistLastViewedNote();
         SetWindowText(m_hwndEdit, L"");
         ResetWordUndoState();
         m_isDirty = false;
@@ -1417,6 +1500,21 @@ void MainWindow::LoadNoteContent(int listIndex) {
         UpdateWindowTitle();
         ScheduleSpellCheck();
     }
+}
+
+void MainWindow::PersistLastViewedNote() {
+    if (!m_db) {
+        return;
+    }
+
+    int noteToRemember = m_currentNoteId;
+    if (noteToRemember == m_lastViewedNoteId) {
+        return;
+    }
+
+    std::string value = (noteToRemember != -1) ? std::to_string(noteToRemember) : "-1";
+    m_db->SetSetting("LastViewedNoteId", value);
+    m_lastViewedNoteId = noteToRemember;
 }
 
 void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfterSave) {

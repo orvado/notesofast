@@ -4,6 +4,7 @@
 #include <commctrl.h>
 #include <vector>
 #include <string>
+#include <map>
 
 // Forward declarations of procedures
 INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
@@ -267,14 +268,20 @@ INT_PTR CALLBACK TagsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPar
             // Load tags from DB
             if (pData && pData->db) {
                 std::vector<Database::Tag> tags = pData->db->GetTags();
+                std::map<int, int> counts = pData->db->GetTagUsageCounts();
                 for (const auto& tag : tags) {
                     LVITEM lvi = {0};
                     lvi.mask = LVIF_TEXT;
                     lvi.pszText = (LPWSTR)tag.name.c_str();
                     lvi.iItem = ListView_GetItemCount(hList);
                     int idx = ListView_InsertItem(hList, &lvi);
-                    
-                    ListView_SetItemText(hList, idx, 1, (LPWSTR)L"0"); // Usages
+
+                    int usage = 0;
+                    auto it = counts.find(tag.id);
+                    if (it != counts.end()) usage = it->second;
+                    wchar_t szUsage[32];
+                    swprintf(szUsage, 32, L"%d", usage);
+                    ListView_SetItemText(hList, idx, 1, szUsage);
 
                     wchar_t szId[16];
                     swprintf(szId, 16, L"%d", tag.id);

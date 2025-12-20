@@ -52,6 +52,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 0;
     }
 
+    window.SetDatabasePath(dbPathW);
+
     ShowWindow(window.Window(), nCmdShow);
 
     MSG msg = { };
