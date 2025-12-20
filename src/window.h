@@ -4,6 +4,7 @@
 #include <richedit.h>
 #include <memory>
 #include <vector>
+#include <string>
 #include "database.h"
 #include "note.h"
 #include "spell_checker.h"
@@ -37,6 +38,8 @@ protected:
     void LoadNotesList(const std::wstring& filter = L"", bool titleOnly = false, bool autoSelectFirst = true, int selectNoteId = -1);
     void LoadNoteContent(int index);
     void PersistLastViewedNote();
+    void ToggleMarkdownPreview();
+    void RenderMarkdownPreview();
     void SaveCurrentNote(int preferredSelectNoteId = -1, bool autoSelectAfterSave = true);
     void CreateNewNote();
     void DeleteCurrentNote();
@@ -77,6 +80,7 @@ protected:
     HWND m_hwnd;
     HWND m_hwndList;
     HWND m_hwndEdit;
+    HWND m_hwndPreview;
     HWND m_hwndSearch;
     HWND m_hwndToolbar;
     HWND m_hwndMarkdownToolbar;
@@ -121,6 +125,13 @@ protected:
     bool m_statusPartsConfigured = false;
     bool m_dbInfoNeedsRefresh = false;
     std::wstring m_dbPath;
+
+    bool m_markdownPreviewMode = false;
+    struct PreviewLink {
+        CHARRANGE range;
+        std::wstring url;
+    };
+    std::vector<PreviewLink> m_previewLinks;
     
     // Search history
     std::vector<std::string> m_searchHistory;

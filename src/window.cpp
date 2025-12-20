@@ -10,6 +10,227 @@
 #include <cwctype>
 #include <cwchar>
 
+static LONG GetRichEditTextLength(HWND hwnd) {
+    GETTEXTLENGTHEX ltx = {};
+    ltx.flags = GTL_DEFAULT;
+    ltx.codepage = 1200; // UTF-16LE
+    return (LONG)SendMessage(hwnd, EM_GETTEXTLENGTHEX, (WPARAM)&ltx, 0);
+}
+
+static std::wstring TrimLeft(const std::wstring& s) {
+    size_t i = 0;
+    while (i < s.size() && (s[i] == L' ' || s[i] == L'\t')) {
+        ++i;
+    }
+    return s.substr(i);
+}
+
+static std::wstring TrimRightSpaces(const std::wstring& s) {
+    size_t end = s.size();
+    while (end > 0 && (s[end - 1] == L' ' || s[end - 1] == L'\t')) {
+        --end;
+    }
+    return s.substr(0, end);
+}
+
+static bool HasMarkdownHardBreak(const std::wstring& line) {
+    // In Markdown, two trailing spaces indicate a hard line break.
+    // Count actual spaces (not tabs).
+    int spaces = 0;
+    for (size_t i = line.size(); i > 0; --i) {
+        wchar_t c = line[i - 1];
+        if (c == L' ') {
+            spaces++;
+        } else if (c == L'\t') {
+            // tabs don't count toward the "two spaces" convention
+            continue;
+        } else {
+            break;
+        }
+        if (spaces >= 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsHorizontalRule(const std::wstring& trimmed) {
+    if (trimmed.size() < 3) return false;
+    wchar_t ch = trimmed[0];
+    if (ch != L'-' && ch != L'*' && ch != L'_') return false;
+    int count = 0;
+    for (wchar_t c : trimmed) {
+        if (c == ch) {
+            count++;
+        } else if (c != L' ' && c != L'\t') {
+            return false;
+        }
+    }
+    return count >= 3;
+}
+
+static std::wstring EnsureUrlHasScheme(const std::wstring& url) {
+    if (url.empty()) {
+        return url;
+    }
+    if (url.find(L"://") != std::wstring::npos) {
+        return url;
+    }
+    // Allow mailto: and other non-:// schemes
+    if (url.find(L":") != std::wstring::npos) {
+        return url;
+    }
+    return L"https://" + url;
+}
+
+struct InlineRun {
+    std::wstring text;
+    bool bold = false;
+    bool italic = false;
+    bool strike = false;
+    bool link = false;
+    std::wstring url;
+};
+
+static std::vector<InlineRun> ParseInlineMarkdown(const std::wstring& text) {
+    std::vector<InlineRun> runs;
+    bool bold = false;
+    bool italic = false;
+    bool strike = false;
+
+    auto flush = [&](std::wstring& buf) {
+        if (!buf.empty()) {
+            InlineRun r;
+            r.text = buf;
+            r.bold = bold;
+            r.italic = italic;
+            r.strike = strike;
+            runs.push_back(std::move(r));
+            buf.clear();
+        }
+    };
+
+    std::wstring buf;
+    for (size_t i = 0; i < text.size();) {
+        // Link: [text](url)
+        if (text[i] == L'[') {
+            size_t closeBracket = text.find(L']', i + 1);
+            if (closeBracket != std::wstring::npos && closeBracket + 1 < text.size() && text[closeBracket + 1] == L'(') {
+                size_t closeParen = text.find(L')', closeBracket + 2);
+                if (closeParen != std::wstring::npos) {
+                    flush(buf);
+                    InlineRun r;
+                    r.text = text.substr(i + 1, closeBracket - (i + 1));
+                    r.bold = bold;
+                    r.italic = italic;
+                    r.strike = strike;
+                    r.link = true;
+                    r.url = text.substr(closeBracket + 2, closeParen - (closeBracket + 2));
+                    runs.push_back(std::move(r));
+                    i = closeParen + 1;
+                    continue;
+                }
+            }
+        }
+
+        // Strike: ~~
+        if (i + 1 < text.size() && text[i] == L'~' && text[i + 1] == L'~') {
+            flush(buf);
+            strike = !strike;
+            i += 2;
+            continue;
+        }
+
+        // Bold: ** or __
+        if (i + 1 < text.size() && ((text[i] == L'*' && text[i + 1] == L'*') || (text[i] == L'_' && text[i + 1] == L'_'))) {
+            flush(buf);
+            bold = !bold;
+            i += 2;
+            continue;
+        }
+
+        // Italic: * or _
+        if (text[i] == L'*' || text[i] == L'_') {
+            flush(buf);
+            italic = !italic;
+            i += 1;
+            continue;
+        }
+
+        buf.push_back(text[i]);
+        i += 1;
+    }
+    flush(buf);
+    return runs;
+}
+
+static void ApplyCharStyle(HWND hwnd, const InlineRun& run, bool enableLinks) {
+    CHARFORMAT2 cf = {};
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_BOLD | CFM_ITALIC | CFM_STRIKEOUT | CFM_UNDERLINE | CFM_LINK | CFM_COLOR;
+    cf.dwEffects = 0;
+    cf.crTextColor = RGB(0, 0, 0);
+
+    if (run.bold) cf.dwEffects |= CFE_BOLD;
+    if (run.italic) cf.dwEffects |= CFE_ITALIC;
+    if (run.strike) cf.dwEffects |= CFE_STRIKEOUT;
+    if (enableLinks && run.link) {
+        cf.dwEffects |= CFE_UNDERLINE;
+        cf.dwEffects |= CFE_LINK;
+        cf.crTextColor = RGB(0, 0, 238);
+    }
+
+    SendMessage(hwnd, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+}
+
+static void ApplyHeaderCharStyle(HWND hwnd, int level) {
+    // Scale by H1..H6 using points; RichEdit uses twips.
+    int pt = 20;
+    if (level == 1) pt = 22;
+    else if (level == 2) pt = 20;
+    else if (level == 3) pt = 18;
+    else if (level == 4) pt = 16;
+    else if (level == 5) pt = 14;
+    else if (level == 6) pt = 13;
+
+    CHARFORMAT2 cf = {};
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_BOLD | CFM_SIZE;
+    cf.dwEffects = CFE_BOLD;
+    cf.yHeight = pt * 20; // twips
+    SendMessage(hwnd, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+}
+
+static void ApplyParaIndent(HWND hwnd, int leftTwips, int firstLineTwips) {
+    PARAFORMAT2 pf = {};
+    pf.cbSize = sizeof(pf);
+    pf.dwMask = PFM_STARTINDENT | PFM_OFFSET;
+    pf.dxStartIndent = leftTwips;
+    pf.dxOffset = firstLineTwips;
+    SendMessage(hwnd, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+}
+
+static void ApplyParaBullets(HWND hwnd, bool numbered) {
+    PARAFORMAT2 pf = {};
+    pf.cbSize = sizeof(pf);
+    pf.dwMask = PFM_NUMBERING | PFM_NUMBERINGSTART | PFM_STARTINDENT | PFM_OFFSET;
+    pf.wNumbering = numbered ? PFN_ARABIC : PFN_BULLET;
+    pf.wNumberingStart = 1;
+    pf.dxStartIndent = 360; // quarter inch
+    pf.dxOffset = -360;
+    SendMessage(hwnd, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+}
+
+static void ApplyParaNormal(HWND hwnd) {
+    PARAFORMAT2 pf = {};
+    pf.cbSize = sizeof(pf);
+    pf.dwMask = PFM_NUMBERING | PFM_STARTINDENT | PFM_OFFSET;
+    pf.wNumbering = 0;
+    pf.dxStartIndent = 0;
+    pf.dxOffset = 0;
+    SendMessage(hwnd, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+}
+
 static std::wstring FormatFileSize(ULONGLONG bytes) {
     wchar_t buffer[64] = {0};
     const double KB = 1024.0;
@@ -47,6 +268,7 @@ static std::wstring FormatFileSize(ULONGLONG bytes) {
 #define ID_REMOVE_ITEM 9
 #define ID_MOVE_UP 10
 #define ID_MOVE_DOWN 11
+#define ID_PREVIEW 13
 #define ID_SPELLCHECK_TIMER 2001
 
 #define IDM_NEW 101
@@ -72,6 +294,22 @@ static std::wstring FormatFileSize(ULONGLONG bytes) {
 
 WNDPROC g_oldEditProc = NULL;
 WNDPROC g_oldSearchProc = NULL;
+
+static LRESULT CALLBACK PreviewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR idSubclass, DWORD_PTR refData) {
+    if (uMsg == WM_LBUTTONDBLCLK) {
+        // Double-clicking preview returns to editable mode.
+        HWND parent = GetParent(hwnd);
+        if (parent) {
+            PostMessage(parent, WM_COMMAND, MAKEWPARAM(IDM_MARKDOWN_PREVIEW, 0), 0);
+            HWND edit = GetDlgItem(parent, ID_RICHEDIT);
+            if (edit) {
+                SetFocus(edit);
+            }
+        }
+        return 0;
+    }
+    return DefSubclassProc(hwnd, uMsg, wParam, lParam);
+}
 
 LRESULT CALLBACK ChecklistEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
@@ -307,8 +545,19 @@ void MainWindow::OnCreate() {
     SendMessage(m_hwndEdit, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
     // Enable Auto-URL detection
-    SendMessage(m_hwndEdit, EM_AUTOURLDETECT, TRUE, 0);
-    SendMessage(m_hwndEdit, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_LINK | ENM_SELCHANGE);
+    bool clickableLinks = (m_db && m_db->GetSetting("clickable_links", "1") == "1");
+    SendMessage(m_hwndEdit, EM_AUTOURLDETECT, clickableLinks ? TRUE : FALSE, 0);
+    SendMessage(m_hwndEdit, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE | (clickableLinks ? ENM_LINK : 0));
+
+    // Create Markdown Preview Rich Edit (Right Panel, initially hidden)
+    m_hwndPreview = CreateWindow(MSFTEDIT_CLASS, L"",
+        WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL,
+        0, 0, 0, 0, m_hwnd, (HMENU)ID_PREVIEW, GetModuleHandle(NULL), NULL);
+    SendMessage(m_hwndPreview, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SendMessage(m_hwndPreview, EM_SETREADONLY, TRUE, 0);
+    SendMessage(m_hwndPreview, EM_AUTOURLDETECT, clickableLinks ? TRUE : FALSE, 0);
+    SendMessage(m_hwndPreview, EM_SETEVENTMASK, 0, clickableLinks ? ENM_LINK : 0);
+    SetWindowSubclass(m_hwndPreview, PreviewSubclassProc, 2, (DWORD_PTR)this);
 
     // Create Toolbar (Top)
     m_hwndToolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | TBSTYLE_LIST | CCS_NODIVIDER, 0, 0, 0, 0, m_hwnd, (HMENU)ID_TOOLBAR, GetModuleHandle(NULL), NULL);
@@ -649,11 +898,21 @@ void MainWindow::OnSize(int width, int height) {
         ShowWindow(m_hwndMarkdownToolbar, SW_HIDE);
     } else {
         int markdownToolbarHeight = 30;
-        ShowWindow(m_hwndMarkdownToolbar, SW_SHOW);
-        
+
+        if (m_markdownPreviewMode) {
+            ShowWindow(m_hwndMarkdownToolbar, SW_HIDE);
+            ShowWindow(m_hwndEdit, SW_HIDE);
+            ShowWindow(m_hwndPreview, SW_SHOW);
+
+            MoveWindow(m_hwndPreview, rightPaneX, toolbarHeight, rightPaneWidth, clientHeight, TRUE);
+        } else {
+            ShowWindow(m_hwndMarkdownToolbar, SW_SHOW);
+            ShowWindow(m_hwndEdit, SW_SHOW);
+            ShowWindow(m_hwndPreview, SW_HIDE);
+
             MoveWindow(m_hwndMarkdownToolbar, rightPaneX, toolbarHeight, rightPaneWidth, markdownToolbarHeight, TRUE);
-        
-        MoveWindow(m_hwndEdit, rightPaneX, toolbarHeight + markdownToolbarHeight, rightPaneWidth, clientHeight - markdownToolbarHeight, TRUE);
+            MoveWindow(m_hwndEdit, rightPaneX, toolbarHeight + markdownToolbarHeight, rightPaneWidth, clientHeight - markdownToolbarHeight, TRUE);
+        }
 
         // Add small horizontal padding to the RichEdit content area
         HDC hdc = GetDC(m_hwnd);
@@ -664,6 +923,7 @@ void MainWindow::OnSize(int width, int height) {
         }
         int margin = MulDiv(5, dpi, 96);
         SendMessage(m_hwndEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(margin, margin));
+        SendMessage(m_hwndPreview, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(margin, margin));
     }
 }
 
@@ -862,7 +1122,7 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         ApplyMarkdown(L"    ", L"");
         break;
     case IDM_MARKDOWN_LINK:
-        ApplyMarkdown(L"[", L"](http://)");
+        ApplyMarkdown(L"[", L"](https://)");
         break;
     case IDM_MARKDOWN_UL:
         ApplyLineMarkdown(L"* ");
@@ -872,6 +1132,9 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         break;
     case IDM_MARKDOWN_HR:
         ApplyLineMarkdown(L"---\n");
+        break;
+    case IDM_MARKDOWN_PREVIEW:
+        ToggleMarkdownPreview();
         break;
     case IDM_MARKDOWN_UNDO:
         SendMessage(m_hwndEdit, EM_UNDO, 0, 0);
@@ -1253,13 +1516,34 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
     } else if (pnmh->code == EN_LINK) {
         ENLINK* pLink = (ENLINK*)lParam;
         if (pLink->msg == WM_LBUTTONDOWN) {
-            // Open URL in default browser
-            std::vector<wchar_t> url(pLink->chrg.cpMax - pLink->chrg.cpMin + 1);
-            TEXTRANGE tr;
-            tr.chrg = pLink->chrg;
-            tr.lpstrText = &url[0];
-            SendMessage(m_hwndEdit, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
-            ShellExecute(NULL, L"open", &url[0], NULL, NULL, SW_SHOWNORMAL);
+            if (!m_db || m_db->GetSetting("clickable_links", "1") != "1") {
+                return 0;
+            }
+
+            HWND src = pnmh->hwndFrom;
+            std::wstring targetUrl;
+
+            if (src == m_hwndPreview) {
+                for (const auto& link : m_previewLinks) {
+                    if (pLink->chrg.cpMin >= link.range.cpMin && pLink->chrg.cpMax <= link.range.cpMax) {
+                        targetUrl = link.url;
+                        break;
+                    }
+                }
+            }
+
+            if (targetUrl.empty()) {
+                std::vector<wchar_t> url(pLink->chrg.cpMax - pLink->chrg.cpMin + 1);
+                TEXTRANGE tr;
+                tr.chrg = pLink->chrg;
+                tr.lpstrText = &url[0];
+                SendMessage(src, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
+                targetUrl = &url[0];
+            }
+
+            if (!targetUrl.empty()) {
+                ShellExecute(NULL, L"open", targetUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+            }
         }
     }
     return 0;
@@ -1440,6 +1724,7 @@ void MainWindow::LoadNotesList(const std::wstring& filter, bool titleOnly, bool 
 
 void MainWindow::LoadNoteContent(int listIndex) {
     if (listIndex >= 0 && listIndex < (int)m_filteredIndices.size()) {
+        int previousNoteId = m_currentNoteId;
         int realIndex = m_filteredIndices[listIndex];
         m_isNewNote = false;
         m_currentNoteIndex = realIndex;
@@ -1447,6 +1732,21 @@ void MainWindow::LoadNoteContent(int listIndex) {
         m_lastCurrentNoteId = m_currentNoteId;
         m_currentNoteTagId = -2; // Reset pending tag change
         PersistLastViewedNote();
+
+        bool renderOnOpen = false;
+        if (m_db) {
+            renderOnOpen = (m_db->GetSetting("render_on_open", "1") == "1");
+        }
+
+        // If the user is switching notes, only keep markdown preview active when render_on_open is enabled.
+        if (previousNoteId != m_currentNoteId) {
+            if (renderOnOpen) {
+                m_markdownPreviewMode = true;
+            } else {
+                m_markdownPreviewMode = false;
+            }
+        }
+
         std::wstring wContent = Utils::Utf8ToWide(m_notes[realIndex].content);
         
         // Only update editor if content is different to preserve cursor/undo
@@ -1476,6 +1776,10 @@ void MainWindow::LoadNoteContent(int listIndex) {
         UpdateChecklistUI();
         UpdateNoteTagCombo();
 
+        if (m_markdownPreviewMode) {
+            RenderMarkdownPreview();
+        }
+
         if (!m_navigatingHistory) {
             RecordHistory(realIndex);
         }
@@ -1486,6 +1790,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         m_currentNoteIndex = -1;
         m_currentNoteId = -1;
         PersistLastViewedNote();
+        m_markdownPreviewMode = false;
         SetWindowText(m_hwndEdit, L"");
         ResetWordUndoState();
         m_isDirty = false;
@@ -1499,6 +1804,10 @@ void MainWindow::LoadNoteContent(int listIndex) {
         UpdateNoteTagCombo();
         UpdateWindowTitle();
         ScheduleSpellCheck();
+
+        if (m_markdownPreviewMode) {
+            RenderMarkdownPreview();
+        }
     }
 }
 
@@ -1515,6 +1824,343 @@ void MainWindow::PersistLastViewedNote() {
     std::string value = (noteToRemember != -1) ? std::to_string(noteToRemember) : "-1";
     m_db->SetSetting("LastViewedNoteId", value);
     m_lastViewedNoteId = noteToRemember;
+}
+
+void MainWindow::ToggleMarkdownPreview() {
+    if (m_checklistMode) {
+        return;
+    }
+
+    m_markdownPreviewMode = !m_markdownPreviewMode;
+
+    if (m_markdownPreviewMode) {
+        RenderMarkdownPreview();
+    }
+
+    RECT rcClient;
+    GetClientRect(m_hwnd, &rcClient);
+    OnSize(rcClient.right - rcClient.left, rcClient.bottom - rcClient.top);
+}
+
+void MainWindow::RenderMarkdownPreview() {
+    if (!m_hwndPreview) {
+        return;
+    }
+
+    bool clickableLinks = (m_db && m_db->GetSetting("clickable_links", "1") == "1");
+    SendMessage(m_hwndPreview, EM_AUTOURLDETECT, clickableLinks ? TRUE : FALSE, 0);
+    SendMessage(m_hwndPreview, EM_SETEVENTMASK, 0, clickableLinks ? ENM_LINK : 0);
+
+    // Prefer current editor text (includes unsaved changes)
+    int len = GetWindowTextLength(m_hwndEdit);
+    std::vector<wchar_t> buf(len + 1);
+    GetWindowText(m_hwndEdit, &buf[0], len + 1);
+    std::wstring markdown = &buf[0];
+
+    m_previewLinks.clear();
+    SendMessage(m_hwndPreview, WM_SETREDRAW, FALSE, 0);
+    SetWindowText(m_hwndPreview, L"");
+    SendMessage(m_hwndPreview, EM_SETSEL, 0, 0);
+
+    // Split into lines (keeping markdown's hard-break behavior separate from paragraph joining)
+    std::vector<std::wstring> lines;
+    {
+        size_t start = 0;
+        while (start <= markdown.size()) {
+            size_t end = markdown.find(L'\n', start);
+            std::wstring line = (end == std::wstring::npos) ? markdown.substr(start) : markdown.substr(start, end - start);
+            if (!line.empty() && line.back() == L'\r') {
+                line.pop_back();
+            }
+            lines.push_back(std::move(line));
+            if (end == std::wstring::npos) {
+                break;
+            }
+            start = end + 1;
+        }
+    }
+
+    // Track how much break spacing we most recently emitted at the end of the document.
+    // 0 = none, 1 = ends with one CRLF, 2 = ends with blank line (CRLFCRLF)
+    int endBreak = 0;
+
+    auto markTextEmitted = [&]() {
+        endBreak = 0;
+    };
+
+    auto emitNewlines = [&](int crlfPairs) {
+        if (crlfPairs <= 0) {
+            return;
+        }
+
+        // Clamp: we only care about "has newline" vs "has blank line".
+        if (crlfPairs >= 2) {
+            endBreak = 2;
+        } else {
+            endBreak = (endBreak >= 2) ? 2 : 1;
+        }
+
+        SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
+        InlineRun nl;
+        ApplyCharStyle(m_hwndPreview, nl, clickableLinks);
+
+        if (crlfPairs >= 2) {
+            SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)L"\r\n\r\n");
+        } else {
+            SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)L"\r\n");
+        }
+    };
+
+    auto isQuoteLine = [&](const std::wstring& raw) {
+        std::wstring t = TrimLeft(raw);
+        return (!t.empty() && t[0] == L'>');
+    };
+
+    auto emitInline = [&](const std::wstring& s) {
+        auto runs = ParseInlineMarkdown(s);
+        for (const auto& run : runs) {
+            SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
+            ApplyCharStyle(m_hwndPreview, run, clickableLinks);
+
+            LONG start = GetRichEditTextLength(m_hwndPreview);
+            SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)run.text.c_str());
+            LONG endPos = GetRichEditTextLength(m_hwndPreview);
+            markTextEmitted();
+
+            if (clickableLinks && run.link && !run.url.empty() && endPos > start) {
+                PreviewLink pl;
+                pl.range.cpMin = start;
+                pl.range.cpMax = endPos;
+                pl.url = EnsureUrlHasScheme(run.url);
+                m_previewLinks.push_back(std::move(pl));
+            }
+        }
+    };
+
+    auto isPlainParagraphLine = [&](const std::wstring& rawLine) {
+        std::wstring t = TrimLeft(rawLine);
+        if (t.empty()) return false;
+        if (IsHorizontalRule(t)) return false;
+        // header
+        if (!t.empty() && t[0] == L'#') {
+            size_t k = 0;
+            while (k < t.size() && t[k] == L'#') k++;
+            if (k > 0 && k <= 6 && k < t.size() && t[k] == L' ') {
+                return false;
+            }
+        }
+        // blockquote
+        if (!t.empty() && t[0] == L'>') return false;
+        // lists
+        if (t.size() >= 2 && (t[0] == L'-' || t[0] == L'*' || t[0] == L'+') && t[1] == L' ') return false;
+        size_t numEnd = 0;
+        while (numEnd < t.size() && iswdigit(t[numEnd])) numEnd++;
+        if (numEnd > 0 && numEnd + 1 < t.size() && (t[numEnd] == L'.' || t[numEnd] == L')') && t[numEnd + 1] == L' ') return false;
+        return true;
+    };
+
+    bool inParagraph = false;
+
+    for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
+        const std::wstring& rawLine = lines[lineIndex];
+        std::wstring trimmed = TrimLeft(rawLine);
+
+        if (trimmed.empty()) {
+            // blank line ends paragraph
+            if (inParagraph) {
+                emitNewlines(2);
+                inParagraph = false;
+            } else {
+                emitNewlines(1);
+            }
+            continue;
+        }
+
+        // Non-paragraph blocks always break any open paragraph first
+        if (!isPlainParagraphLine(rawLine)) {
+            if (inParagraph) {
+                emitNewlines(1);
+                inParagraph = false;
+            }
+
+            // Reset paragraph formatting per block
+            SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
+            ApplyParaNormal(m_hwndPreview);
+
+            if (IsHorizontalRule(trimmed)) {
+                std::wstring hr = L"----------------------------------------";
+                SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)(hr + L"\r\n").c_str());
+                markTextEmitted();
+                endBreak = 1;
+                continue;
+            }
+
+            // Header
+            int headerLevel = 0;
+            size_t i = 0;
+            while (i < trimmed.size() && trimmed[i] == L'#' && headerLevel < 6) {
+                headerLevel++;
+                i++;
+            }
+            if (headerLevel > 0 && i < trimmed.size() && trimmed[i] == L' ') {
+                std::wstring headerText = trimmed.substr(i + 1);
+                ApplyHeaderCharStyle(m_hwndPreview, headerLevel);
+                SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)(headerText + L"\r\n").c_str());
+                markTextEmitted();
+                endBreak = 1;
+                continue;
+            }
+
+            // Blockquote
+            bool isQuote = false;
+            if (!trimmed.empty() && trimmed[0] == L'>') {
+                isQuote = true;
+                trimmed = TrimLeft(trimmed.substr(1));
+            }
+
+            // Add paragraph-like spacing around a blockquote "block" (consecutive quote lines).
+            // Only add margins when there is surrounding content; avoid adding at the start or end.
+            bool quoteStart = false;
+            bool quoteEnd = false;
+            if (isQuote) {
+                quoteStart = (lineIndex == 0) || !isQuoteLine(lines[lineIndex - 1]);
+                quoteEnd = (lineIndex + 1 >= lines.size()) || !isQuoteLine(lines[lineIndex + 1]);
+
+                if (quoteStart) {
+                    // Ensure exactly one blank line (CRLFCRLF) before a quote block.
+                    // Most blocks already end with one CRLF; in that common case we only add one more.
+                    if (GetRichEditTextLength(m_hwndPreview) > 0 && endBreak < 2) {
+                        emitNewlines(2 - endBreak);
+                    }
+                }
+            }
+
+            auto isListLine = [](std::wstring t) {
+                t = TrimLeft(t);
+                if (!t.empty() && t[0] == L'>') {
+                    t = TrimLeft(t.substr(1));
+                }
+
+                if (t.size() >= 2 && (t[0] == L'-' || t[0] == L'*' || t[0] == L'+') && t[1] == L' ') {
+                    return true;
+                }
+
+                size_t digits = 0;
+                while (digits < t.size() && iswdigit(t[digits])) {
+                    digits++;
+                }
+                if (digits > 0 && digits + 1 < t.size() && (t[digits] == L'.' || t[digits] == L')') && t[digits + 1] == L' ') {
+                    return true;
+                }
+                return false;
+            };
+
+            // Ordered list
+            bool isOrdered = false;
+            size_t numEnd = 0;
+            while (numEnd < trimmed.size() && iswdigit(trimmed[numEnd])) {
+                numEnd++;
+            }
+            if (numEnd > 0 && numEnd + 1 < trimmed.size() && (trimmed[numEnd] == L'.' || trimmed[numEnd] == L')') && trimmed[numEnd + 1] == L' ') {
+                isOrdered = true;
+                trimmed = trimmed.substr(numEnd + 2);
+            }
+
+            // Unordered list
+            bool isUnordered = false;
+            if (!isOrdered && trimmed.size() >= 2 && (trimmed[0] == L'-' || trimmed[0] == L'*' || trimmed[0] == L'+') && trimmed[1] == L' ') {
+                isUnordered = true;
+                trimmed = trimmed.substr(2);
+            }
+
+            if (isQuote) {
+                ApplyParaIndent(m_hwndPreview, 360, 0);
+            }
+            if (isOrdered) {
+                ApplyParaBullets(m_hwndPreview, true);
+            } else if (isUnordered) {
+                ApplyParaBullets(m_hwndPreview, false);
+            }
+
+            emitInline(trimmed);
+
+            bool isListItem = isOrdered || isUnordered;
+            bool hasNextLine = (lineIndex + 1 < lines.size());
+            bool nextIsListItem = false;
+            if (isListItem && hasNextLine) {
+                const std::wstring& nextRaw = lines[lineIndex + 1];
+                nextIsListItem = isListLine(nextRaw);
+            }
+
+            // Only insert a list newline when needed; otherwise we leave the caret at the end of the last item
+            // to avoid creating an extra empty numbered/bulleted paragraph.
+            if (isListItem) {
+                if (nextIsListItem) {
+                    emitNewlines(1);
+                } else if (hasNextLine) {
+                    // End the list and reset formatting on the next paragraph.
+                    emitNewlines(1);
+                    ApplyParaNormal(m_hwndPreview);
+                }
+            } else {
+                emitNewlines(1);
+            }
+
+            // If this was the end of a quote block and there is more content after it,
+            // ensure there's a blank line below (quote "margin"), without affecting EOF.
+            if (isQuote && quoteEnd && hasNextLine) {
+                // Ensure exactly one blank line (CRLFCRLF) after a quote block.
+                // At this point we've typically already emitted one CRLF for the quote line.
+                if (endBreak < 2) {
+                    emitNewlines(2 - endBreak);
+                }
+                // Reset formatting so the next block doesn't inherit quote indentation.
+                ApplyParaNormal(m_hwndPreview);
+            }
+            continue;
+        }
+
+        // Plain paragraph line: join with spaces unless hard-break
+        if (!inParagraph) {
+            SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
+            ApplyParaNormal(m_hwndPreview);
+            inParagraph = true;
+        }
+
+        bool hardBreak = HasMarkdownHardBreak(rawLine);
+        std::wstring content = rawLine;
+        if (hardBreak) {
+            // Remove trailing spaces used to signal break
+            content = TrimRightSpaces(content);
+        }
+        std::wstring contentTrimLeft = TrimLeft(content);
+        emitInline(contentTrimLeft);
+
+        // Lookahead to determine join behavior
+        bool nextIsParagraphLine = false;
+        if (lineIndex + 1 < lines.size()) {
+            const std::wstring& nextLine = lines[lineIndex + 1];
+            nextIsParagraphLine = isPlainParagraphLine(nextLine);
+            if (TrimLeft(nextLine).empty()) {
+                nextIsParagraphLine = false;
+            }
+        }
+
+        if (hardBreak) {
+            emitNewlines(1);
+        } else if (nextIsParagraphLine) {
+            SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
+            SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)L" ");
+            markTextEmitted();
+        } else {
+            emitNewlines(1);
+            inParagraph = false;
+        }
+    }
+
+    SendMessage(m_hwndPreview, EM_SETSEL, 0, 0);
+    SendMessage(m_hwndPreview, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_hwndPreview, NULL, TRUE);
 }
 
 void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfterSave) {
@@ -1894,6 +2540,7 @@ void MainWindow::UpdateChecklistUI() {
 
     if (m_checklistMode && m_currentNoteIndex >= 0) {
         ShowWindow(m_hwndEdit, SW_HIDE);
+        ShowWindow(m_hwndPreview, SW_HIDE);
         ShowWindow(m_hwndChecklistList, SW_SHOW);
         ShowWindow(m_hwndChecklistEdit, SW_SHOW);
         ShowWindow(m_hwndAddItem, SW_SHOW);
@@ -1930,7 +2577,13 @@ void MainWindow::UpdateChecklistUI() {
         }
         SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)statusText.c_str());
     } else {
-        ShowWindow(m_hwndEdit, SW_SHOW);
+        if (m_markdownPreviewMode) {
+            ShowWindow(m_hwndEdit, SW_HIDE);
+            ShowWindow(m_hwndPreview, SW_SHOW);
+        } else {
+            ShowWindow(m_hwndEdit, SW_SHOW);
+            ShowWindow(m_hwndPreview, SW_HIDE);
+        }
         ShowWindow(m_hwndChecklistList, SW_HIDE);
         ShowWindow(m_hwndChecklistEdit, SW_HIDE);
         ShowWindow(m_hwndAddItem, SW_HIDE);
@@ -2407,6 +3060,12 @@ LRESULT CALLBACK MainWindow::RichEditSubclassProc(HWND hwnd, UINT uMsg, WPARAM w
     }
 
     switch (uMsg) {
+    case WM_LBUTTONDBLCLK:
+        if (!self->m_markdownPreviewMode && !self->m_checklistMode && self->m_db && self->m_db->GetSetting("double_click_markdown", "0") == "1") {
+            self->ToggleMarkdownPreview();
+            return 0;
+        }
+        break;
     case WM_PAINT: {
         LRESULT res = DefSubclassProc(hwnd, uMsg, wParam, lParam);
         HDC hdc = GetDC(hwnd);
