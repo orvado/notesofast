@@ -47,6 +47,7 @@ protected:
     void SetSortOrder(Database::SortBy sort);
     void ToggleChecklistMode();
     void UpdateChecklistUI();
+    void UpdateNoteTagCombo();
     void AddChecklistItem();
     void RemoveChecklistItem();
     void MoveChecklistItemUp();
@@ -67,7 +68,7 @@ protected:
     void SaveSearchHistory();
     void ShowSettingsDialog();
     void ApplyMarkdown(const std::wstring& prefix, const std::wstring& suffix);
-    void ApplyLineMarkdown(const std::wstring& prefix);
+    void ApplyLineMarkdown(const std::wstring& prefix, bool sequential = false);
 
     HWND m_hwnd;
     HWND m_hwndList;
@@ -96,6 +97,7 @@ protected:
     bool m_checklistMode = false;
     int m_selectedTagId = -1; // -1 for <None>
     int m_newNoteTagId = -1; // Tag to apply when saving a new note
+    int m_currentNoteTagId = -2; // Pending tag change: -2=no change, -1=<None>, >=0=tag ID
     bool m_isReloading = false;
 
     int m_splitPos = 250;

@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "window.h"
 #include "utils.h"
 #include "spell_checker.h"
@@ -7,6 +8,13 @@
 #include <algorithm>
 #include <memory>
 #include <cwctype>
+
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
+#endif
 
 #define ID_LISTVIEW 1
 #define ID_RICHEDIT 2
@@ -294,44 +302,44 @@ void MainWindow::OnCreate() {
     TBBUTTON tbb[13];
     ZeroMemory(tbb, sizeof(tbb));
 
-    tbb[0].iBitmap = histIdx + HIST_BACK;
-    tbb[0].idCommand = IDM_HIST_BACK;
+    tbb[0].iBitmap = stdIdx + STD_FILENEW;
+    tbb[0].idCommand = IDM_NEW;
     tbb[0].fsState = TBSTATE_ENABLED;
     tbb[0].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[0].iString = -1;
 
-    tbb[1].iBitmap = histIdx + HIST_FORWARD;
-    tbb[1].idCommand = IDM_HIST_FORWARD;
+    tbb[1].iBitmap = stdIdx + STD_FILESAVE;
+    tbb[1].idCommand = IDM_SAVE;
     tbb[1].fsState = TBSTATE_ENABLED;
     tbb[1].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[1].iString = -1;
 
-    tbb[2].iBitmap = stdIdx + STD_FILENEW;
-    tbb[2].idCommand = IDM_NEW;
+    tbb[2].iBitmap = stdIdx + STD_PROPERTIES;
+    tbb[2].idCommand = IDM_SETTINGS;
     tbb[2].fsState = TBSTATE_ENABLED;
     tbb[2].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[2].iString = -1;
+    tbb[2].iString = iSettings;
 
-    tbb[3].iBitmap = stdIdx + STD_FILESAVE;
-    tbb[3].idCommand = IDM_SAVE;
+    tbb[3].iBitmap = stdIdx + STD_DELETE;
+    tbb[3].idCommand = IDM_DELETE;
     tbb[3].fsState = TBSTATE_ENABLED;
     tbb[3].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[3].iString = -1;
 
-    tbb[4].iBitmap = stdIdx + STD_PROPERTIES;
-    tbb[4].idCommand = IDM_SETTINGS;
+    tbb[4].iBitmap = viewIdx + 6; // VIEW_SORTDATE
+    tbb[4].idCommand = IDM_SORT;
     tbb[4].fsState = TBSTATE_ENABLED;
     tbb[4].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-    tbb[4].iString = iSettings;
+    tbb[4].iString = -1;
 
-    tbb[5].iBitmap = stdIdx + STD_DELETE;
-    tbb[5].idCommand = IDM_DELETE;
+    tbb[5].iBitmap = histIdx + HIST_BACK;
+    tbb[5].idCommand = IDM_HIST_BACK;
     tbb[5].fsState = TBSTATE_ENABLED;
     tbb[5].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[5].iString = -1;
 
-    tbb[6].iBitmap = viewIdx + 6; // VIEW_SORTDATE
-    tbb[6].idCommand = IDM_SORT;
+    tbb[6].iBitmap = histIdx + HIST_FORWARD;
+    tbb[6].idCommand = IDM_HIST_FORWARD;
     tbb[6].fsState = TBSTATE_ENABLED;
     tbb[6].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
     tbb[6].iString = -1;
@@ -407,7 +415,7 @@ void MainWindow::OnCreate() {
     // Add Tag Filter
     SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 1, (LPARAM)&tbbSep);
     
-    int iTagLabel = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)L"Tag:\0");
+    int iTagLabel = (int)SendMessage(m_hwndToolbar, TB_ADDSTRING, 0, (LPARAM)L"Filter:\0");
     
     std::wstring tagButtonText = L"<None>";
     if (m_selectedTagId != -1) {
@@ -458,8 +466,9 @@ void MainWindow::OnCreate() {
     int iMPreview = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"View\0");
     int iMUndo = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Undo\0");
     int iMRedo = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Redo\0");
+    int iMTagButton = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"<None>\0");
 
-    TBBUTTON mtbb[18];
+    TBBUTTON mtbb[20];
     ZeroMemory(mtbb, sizeof(mtbb));
 
     int i = 0;
@@ -490,6 +499,10 @@ void MainWindow::OnCreate() {
 
     mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_UNDO; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMUndo; i++;
     mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_REDO; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMRedo; i++;
+
+    // Tag button lives inside the markdown toolbar so it renders like other toolbar buttons (e.g., View)
+    mtbb[i].fsStyle = BTNS_SEP; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_NOTE_TAG_BUTTON; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMTagButton; i++;
 
     SendMessage(m_hwndMarkdownToolbar, TB_ADDBUTTONS, i, (LPARAM)&mtbb);
 
@@ -603,8 +616,20 @@ void MainWindow::OnSize(int width, int height) {
     } else {
         int markdownToolbarHeight = 30;
         ShowWindow(m_hwndMarkdownToolbar, SW_SHOW);
-        MoveWindow(m_hwndMarkdownToolbar, rightPaneX, toolbarHeight, rightPaneWidth, markdownToolbarHeight, TRUE);
+        
+            MoveWindow(m_hwndMarkdownToolbar, rightPaneX, toolbarHeight, rightPaneWidth, markdownToolbarHeight, TRUE);
+        
         MoveWindow(m_hwndEdit, rightPaneX, toolbarHeight + markdownToolbarHeight, rightPaneWidth, clientHeight - markdownToolbarHeight, TRUE);
+
+        // Add small horizontal padding to the RichEdit content area
+        HDC hdc = GetDC(m_hwnd);
+        int dpi = 96;
+        if (hdc) {
+            dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+            ReleaseDC(m_hwnd, hdc);
+        }
+        int margin = MulDiv(5, dpi, 96);
+        SendMessage(m_hwndEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(margin, margin));
     }
 }
 
@@ -762,7 +787,7 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         ApplyLineMarkdown(L"* ");
         break;
     case IDM_MARKDOWN_OL:
-        ApplyLineMarkdown(L"1. ");
+        ApplyLineMarkdown(L"1. ", true);
         break;
     case IDM_MARKDOWN_HR:
         ApplyLineMarkdown(L"---\n");
@@ -833,6 +858,42 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
             LoadNotesList(&buf[0], m_searchTitleOnly, autoSelect);
         }
         break;
+    case IDM_NOTE_TAG_BUTTON:
+        {
+            // Show context menu with tag options
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenu(hMenu, MF_STRING, IDM_TAG_CHANGE_BASE, L"<None>");
+            
+            std::vector<Database::Tag> tags = m_db->GetTags();
+            for (const auto& tag : tags) {
+                AppendMenu(hMenu, MF_STRING, IDM_TAG_CHANGE_BASE + tag.id, tag.name.c_str());
+            }
+            
+            RECT rc;
+            SendMessage(m_hwndMarkdownToolbar, TB_GETRECT, IDM_NOTE_TAG_BUTTON, (LPARAM)&rc);
+            MapWindowPoints(m_hwndMarkdownToolbar, NULL, (LPPOINT)&rc, 2);
+            TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, m_hwnd, NULL);
+            DestroyMenu(hMenu);
+        }
+        break;
+    }
+    
+    // Handle Tag Change Commands
+    if (LOWORD(wParam) >= IDM_TAG_CHANGE_BASE && LOWORD(wParam) < IDM_TAG_CHANGE_BASE + 1000) {
+        int newTagId = LOWORD(wParam) - IDM_TAG_CHANGE_BASE;
+        if (LOWORD(wParam) == IDM_TAG_CHANGE_BASE) newTagId = -1;
+        
+        // Store the selected tag (don't mark as dirty - tag changes save silently)
+        m_currentNoteTagId = newTagId;
+        
+        // Update the button to show the new tag
+        if (m_currentNoteId != -1 || m_isNewNote) {
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Tag changed");
+            UpdateNoteTagCombo();
+        }
+
+        // Prevent tag-assignment commands from being treated as tag-filter commands
+        return;
     }
     
     // Handle Color Commands
@@ -882,6 +943,9 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         std::vector<wchar_t> buf(len + 1);
         GetWindowText(m_hwndSearch, &buf[0], len + 1);
         LoadNotesList(&buf[0], m_searchTitleOnly, true);
+
+        // Keep the markdown tag button in sync with the active filter, even if no notes match
+        UpdateNoteTagCombo();
     }
 }
 
@@ -1038,7 +1102,6 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
                     }
                     return 0;
                 }
-                SaveCurrentNote(targetNoteId, false); // Auto-save previous note
 
                 int listIndex = (targetNoteId != -1) ? FindListIndexByNoteId(targetNoteId) : pnmv->iItem;
                 if (listIndex != -1) {
@@ -1301,6 +1364,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         m_currentNoteIndex = realIndex;
         m_currentNoteId = m_notes[realIndex].id;
         m_lastCurrentNoteId = m_currentNoteId;
+        m_currentNoteTagId = -2; // Reset pending tag change
         std::wstring wContent = Utils::Utf8ToWide(m_notes[realIndex].content);
         
         // Only update editor if content is different to preserve cursor/undo
@@ -1328,6 +1392,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         }
         
         UpdateChecklistUI();
+        UpdateNoteTagCombo();
 
         if (!m_navigatingHistory) {
             RecordHistory(realIndex);
@@ -1348,6 +1413,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_ARCHIVE, FALSE);
         SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_TOGGLE_CHECKLIST, FALSE);
         UpdateChecklistUI();
+        UpdateNoteTagCombo();
         UpdateWindowTitle();
         ScheduleSpellCheck();
     }
@@ -1398,13 +1464,7 @@ void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfter
             SetWindowText(m_hwndSearch, L"");
             m_currentSearchFilter = L"";
             
-            // Ensure the filter matches the tag we applied so the note will be visible
-            if (tagToApply != -1) {
-                m_selectedTagId = tagToApply;
-                m_db->SetSetting("SelectedTagId", std::to_string(tagToApply));
-            }
-            
-            // Reload with empty filter but current tag will be applied
+            // Reload with empty filter but current tag filter will be applied
             LoadNotesList(L"", false, autoSelectAfterSave, newNote.id);
             
             UpdateWindowTitle();
@@ -1413,6 +1473,35 @@ void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfter
             swprintf_s(errMsg, 256, L"ERROR: Failed to create note");
             SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)errMsg);
         }
+        return;
+    }
+
+    // Check if there's a pending tag change even if content isn't dirty
+    if (!m_isDirty && m_currentNoteTagId != -2 && m_currentNoteId != -1) {
+        // Save only the tag change without prompting
+        std::vector<Database::Tag> currentTags = m_db->GetNoteTags(m_currentNoteId);
+        int currentTagId = !currentTags.empty() ? currentTags[0].id : -1;
+        int newTagId = m_currentNoteTagId;
+        
+        if (currentTagId != newTagId) {
+            if (currentTagId != -1) {
+                m_db->RemoveTagFromNote(m_currentNoteId, currentTagId);
+            }
+            if (newTagId != -1) {
+                m_db->AddTagToNote(m_currentNoteId, newTagId);
+            }
+            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Tag saved");
+            // Reload the list if a filter is active so the note disappears when it no longer matches
+            if (m_selectedTagId != -1) {
+                bool noteStillMatches = (newTagId == m_selectedTagId);
+                int selectId = noteStillMatches ? m_currentNoteId : -1;
+                LoadNotesList(m_currentSearchFilter, m_searchTitleOnly, true, selectId);
+            }
+
+            m_currentNoteTagId = -2;
+            UpdateNoteTagCombo();
+        }
+        m_currentNoteTagId = -2;
         return;
     }
 
@@ -1493,8 +1582,33 @@ void MainWindow::SaveCurrentNote(int preferredSelectNoteId, bool autoSelectAfter
         }
 
         if (m_db->UpdateNote(updateNote)) {
+            // Also update the tag if it was changed
+            // Get current tag for this note
+            std::vector<Database::Tag> currentTags = m_db->GetNoteTags(noteIdToSave);
+            int currentTagId = !currentTags.empty() ? currentTags[0].id : -1;
+            
+            // Only update tag if there's a pending change
+            if (m_currentNoteTagId != -2) {
+                int newTagId = m_currentNoteTagId;
+                
+                // Remove old tag if it changed
+                if (currentTagId != newTagId) {
+                    if (currentTagId != -1) {
+                        m_db->RemoveTagFromNote(noteIdToSave, currentTagId);
+                    }
+                    // Add new tag
+                    if (newTagId != -1) {
+                        m_db->AddTagToNote(noteIdToSave, newTagId);
+                    }
+                }
+            }
+            
             m_isDirty = false;
+            m_currentNoteTagId = -2; // Reset pending tag change
             SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Note saved");
+            
+            // Refresh the notes list to update tag associations
+            LoadNotesList(m_currentSearchFilter, m_searchTitleOnly, false, m_currentNoteId);
         } else {
             wchar_t errMsg[256];
             swprintf_s(errMsg, 256, L"ERROR: Failed to update note %d", noteIdToSave);
@@ -1529,6 +1643,7 @@ void MainWindow::CreateNewNote() {
     m_currentNoteIndex = -1;
     m_currentNoteId = -1;
     m_lastCurrentNoteId = -1;
+    m_currentNoteTagId = -2;
     m_isDirty = false;
     m_checklistMode = false;
     m_newNoteTagId = m_selectedTagId; // Capture the current tag filter
@@ -1540,6 +1655,7 @@ void MainWindow::CreateNewNote() {
     SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_ARCHIVE, FALSE);
     SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_TOGGLE_CHECKLIST, FALSE);
     UpdateChecklistUI();
+    UpdateNoteTagCombo();
 
     // Clear search so user sees full list once saved later
     SetWindowText(m_hwndSearch, L"");
@@ -1728,6 +1844,49 @@ void MainWindow::UpdateChecklistUI() {
         std::wstring statusText = L"Notes: " + std::to_wstring(m_notes.size());
         SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)statusText.c_str());
     }
+}
+
+void MainWindow::UpdateNoteTagCombo() {
+    // Update the tag button text to show the current note's tag
+    std::wstring buttonText = L"<None>";
+    int tagToDisplay = -1;
+    
+    // If we have a pending tag change, show it
+    if (m_currentNoteTagId != -2) {  // -2 means no pending change
+        tagToDisplay = m_currentNoteTagId;  // -1 means <None> was selected
+    } else if (m_currentNoteId != -1 && m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size()) {
+        std::vector<Database::Tag> noteTags = m_db->GetNoteTags(m_notes[m_currentNoteIndex].id);
+        if (!noteTags.empty()) {
+            tagToDisplay = noteTags[0].id; // Only one tag per note for now
+        }
+    } else if (m_isNewNote) {
+        // For a new note, prefer the captured tag; if none captured yet, fall back to the active filter
+        if (m_newNoteTagId == -1 && m_selectedTagId != -1) {
+            m_newNoteTagId = m_selectedTagId;
+        }
+        tagToDisplay = m_newNoteTagId;
+    } else if (m_selectedTagId != -1) {
+        // When no note is selected (e.g., filter has zero results), show the active filter tag
+        tagToDisplay = m_selectedTagId;
+    }
+    
+    // Find the tag name
+    if (tagToDisplay != -1) {
+        std::vector<Database::Tag> tags = m_db->GetTags();
+        for (const auto& tag : tags) {
+            if (tag.id == tagToDisplay) {
+                buttonText = tag.name;
+                break;
+            }
+        }
+    }
+    
+    // Update the toolbar button text
+    TBBUTTONINFO tbbi = {};
+    tbbi.cbSize = sizeof(tbbi);
+    tbbi.dwMask = TBIF_TEXT;
+    tbbi.pszText = (LPWSTR)buttonText.c_str();
+    SendMessage(m_hwndMarkdownToolbar, TB_SETBUTTONINFO, IDM_NOTE_TAG_BUTTON, (LPARAM)&tbbi);
 }
 
 void MainWindow::AddChecklistItem() {
@@ -2107,6 +2266,22 @@ bool MainWindow::PromptToSaveIfDirty(int preferredSelectNoteId, bool autoSelectA
         return true;
     }
 
+    // No content edits, but pending tag change: prompt before switching
+    if (!m_isDirty && m_currentNoteTagId != -2 && m_currentNoteId != -1) {
+        int res = MessageBox(m_hwnd, L"Save tag change before switching notes?", L"Unsaved Tag Change", MB_YESNOCANCEL | MB_ICONQUESTION);
+        if (res == IDCANCEL) {
+            return false;
+        }
+        if (res == IDYES) {
+            SaveCurrentNote(preferredSelectNoteId, autoSelectAfterSave);
+            return true;
+        }
+        // Discard tag change
+        m_currentNoteTagId = -2;
+        UpdateNoteTagCombo();
+        return true;
+    }
+
     // No unsaved changes
     if (!m_isDirty) {
         return true;
@@ -2120,8 +2295,10 @@ bool MainWindow::PromptToSaveIfDirty(int preferredSelectNoteId, bool autoSelectA
         SaveCurrentNote(preferredSelectNoteId, autoSelectAfterSave);
         return true;
     }
-    // Discard
+    // Discard - reset any pending tag change
     m_isDirty = false;
+    m_currentNoteTagId = -2;
+    UpdateNoteTagCombo(); // Revert button text to original tag
     return true;
 }
 
@@ -2476,21 +2653,77 @@ void MainWindow::ApplyMarkdown(const std::wstring& prefix, const std::wstring& s
     SetFocus(m_hwndEdit);
 }
 
-void MainWindow::ApplyLineMarkdown(const std::wstring& prefix) {
+void MainWindow::ApplyLineMarkdown(const std::wstring& prefix, bool sequential) {
     CHARRANGE cr;
     SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&cr);
-    
-    LRESULT lineIndex = SendMessage(m_hwndEdit, EM_EXLINEFROMCHAR, 0, cr.cpMin);
-    LRESULT lineStart = SendMessage(m_hwndEdit, EM_LINEINDEX, lineIndex, 0);
-    
-    CHARRANGE lineCr;
-    lineCr.cpMin = (LONG)lineStart;
-    lineCr.cpMax = (LONG)lineStart;
-    SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&lineCr);
-    SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)prefix.c_str());
-    
-    cr.cpMin += (LONG)prefix.length();
-    cr.cpMax += (LONG)prefix.length();
+
+    if (cr.cpMin == cr.cpMax) {
+        std::wstring linePrefix = sequential ? (std::to_wstring(1) + L". ") : prefix;
+
+        LRESULT lineIndex = SendMessage(m_hwndEdit, EM_EXLINEFROMCHAR, 0, cr.cpMin);
+        LRESULT lineStart = SendMessage(m_hwndEdit, EM_LINEINDEX, lineIndex, 0);
+
+        CHARRANGE lineCr;
+        lineCr.cpMin = (LONG)lineStart;
+        lineCr.cpMax = (LONG)lineStart;
+        SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&lineCr);
+        SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)linePrefix.c_str());
+
+        cr.cpMin += (LONG)linePrefix.length();
+        cr.cpMax += (LONG)linePrefix.length();
+        SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
+        SetFocus(m_hwndEdit);
+        return;
+    }
+
+    int textLen = (int)SendMessage(m_hwndEdit, WM_GETTEXTLENGTH, 0, 0);
+    int startLine = (int)SendMessage(m_hwndEdit, EM_EXLINEFROMCHAR, 0, cr.cpMin);
+    int endChar = (cr.cpMax > 0) ? cr.cpMax - 1 : cr.cpMax;
+    int endLine = (int)SendMessage(m_hwndEdit, EM_EXLINEFROMCHAR, 0, endChar);
+
+    struct LineInsert { int pos; std::wstring text; };
+    std::vector<LineInsert> inserts;
+    int counter = 1;
+
+    for (int line = startLine; line <= endLine; ++line) {
+        int lineStart = (int)SendMessage(m_hwndEdit, EM_LINEINDEX, line, 0);
+        if (lineStart == -1) continue;
+        int nextLineStart = (int)SendMessage(m_hwndEdit, EM_LINEINDEX, line + 1, 0);
+        if (nextLineStart == -1) {
+            nextLineStart = textLen;
+        }
+
+        int overlapStart = (lineStart > (int)cr.cpMin) ? lineStart : (int)cr.cpMin;
+        int overlapEnd = (nextLineStart < (int)cr.cpMax) ? nextLineStart : (int)cr.cpMax;
+        if (overlapEnd <= overlapStart) {
+            continue;
+        }
+
+        std::wstring linePrefix = sequential ? (std::to_wstring(counter++) + L". ") : prefix;
+        LineInsert insert;
+        insert.pos = lineStart;
+        insert.text = linePrefix;
+        inserts.push_back(insert);
+    }
+
+    int shiftBeforeStart = 0;
+    int shiftBeforeEnd = 0;
+    for (const auto& insert : inserts) {
+        if (insert.pos <= cr.cpMin) {
+            shiftBeforeStart += (int)insert.text.length();
+        }
+        if (insert.pos < cr.cpMax) {
+            shiftBeforeEnd += (int)insert.text.length();
+        }
+    }
+
+    for (auto it = inserts.rbegin(); it != inserts.rend(); ++it) {
+        SendMessage(m_hwndEdit, EM_SETSEL, it->pos, it->pos);
+        SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)it->text.c_str());
+    }
+
+    cr.cpMin += shiftBeforeStart;
+    cr.cpMax += shiftBeforeEnd;
     SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
     SetFocus(m_hwndEdit);
 }
