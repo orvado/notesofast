@@ -11,10 +11,11 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
 INT_PTR CALLBACK AppearanceTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK MarkdownTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK TagsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
 struct SettingsData {
     HWND hTab;
-    HWND hPages[3];
+    HWND hPages[4];
     int currentPage;
     Database* db;
 };
@@ -26,7 +27,7 @@ void CreateSettingsDialog(HWND hWndParent, Database* db) {
 void OnSelChanged(HWND hDlg, SettingsData* pData) {
     int iSel = TabCtrl_GetCurSel(pData->hTab);
     
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (i == iSel) {
             ShowWindow(pData->hPages[i], SW_SHOW);
         } else {
@@ -57,6 +58,8 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             TabCtrl_InsertItem(pData->hTab, 1, &tie);
             tie.pszText = (LPWSTR)L"Tags";
             TabCtrl_InsertItem(pData->hTab, 2, &tie);
+            tie.pszText = (LPWSTR)L"Cloud Sync";
+            TabCtrl_InsertItem(pData->hTab, 3, &tie);
 
             RECT rcTab;
             GetWindowRect(pData->hTab, &rcTab);
@@ -66,8 +69,9 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             pData->hPages[0] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_APPEARANCE), hDlg, AppearanceTabProc, (LPARAM)pData);
             pData->hPages[1] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_MARKDOWN), hDlg, MarkdownTabProc, (LPARAM)pData);
             pData->hPages[2] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_TAGS), hDlg, TagsTabProc, (LPARAM)pData);
+            pData->hPages[3] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_CLOUD_SYNC), hDlg, CloudSyncTabProc, (LPARAM)pData);
 
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < 4; i++) {
                 MoveWindow(pData->hPages[i], rcTab.left, rcTab.top, rcTab.right - rcTab.left, rcTab.bottom - rcTab.top, FALSE);
             }
 
@@ -105,6 +109,88 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
         }
         break;
     }
+    return (INT_PTR)FALSE;
+}
+
+static void PopulateCloudIntervalCombo(HWND hCombo) {
+    const wchar_t* items[] = { L"15", L"30", L"60" };
+    for (auto item : items) {
+        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)item);
+    }
+}
+
+static void SetCloudStatusText(HWND hDlg, const std::wstring& text) {
+    SetDlgItemText(hDlg, IDC_STATIC_CLOUD_STATUS, text.c_str());
+}
+
+INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
+    SettingsData* pData = (SettingsData*)GetWindowLongPtr(hDlg, GWLP_USERDATA);
+
+    switch (message) {
+    case WM_INITDIALOG:
+        {
+            SetWindowLongPtr(hDlg, GWLP_USERDATA, lParam);
+            pData = (SettingsData*)lParam;
+
+            // Status is driven by settings for now (real auth wiring comes later).
+            std::string status = pData->db->GetSetting("cloud_sync_status", "Not connected");
+            SetCloudStatusText(hDlg, Utils::Utf8ToWide(status));
+
+            CheckDlgButton(hDlg, IDC_CHECK_CLOUD_SYNC_ENABLED,
+                pData->db->GetSetting("cloud_sync_enabled", "0") == "1" ? BST_CHECKED : BST_UNCHECKED);
+
+            CheckDlgButton(hDlg, IDC_CHECK_CLOUD_SYNC_ON_EXIT,
+                pData->db->GetSetting("cloud_sync_on_exit", "1") == "1" ? BST_CHECKED : BST_UNCHECKED);
+
+            HWND hCombo = GetDlgItem(hDlg, IDC_COMBO_CLOUD_SYNC_INTERVAL);
+            PopulateCloudIntervalCombo(hCombo);
+
+            std::string interval = pData->db->GetSetting("cloud_sync_interval_minutes", "30");
+            std::wstring wInterval = Utils::Utf8ToWide(interval);
+            SendMessage(hCombo, CB_SELECTSTRING, -1, (LPARAM)wInterval.c_str());
+            if (SendMessage(hCombo, CB_GETCURSEL, 0, 0) == CB_ERR) {
+                SendMessage(hCombo, CB_SETCURSEL, 1, 0); // default to 30
+            }
+
+            std::string lastSync = pData->db->GetSetting("cloud_last_sync_time", "");
+            SetDlgItemText(hDlg, IDC_STATIC_CLOUD_LAST_SYNC, Utils::Utf8ToWide(lastSync).c_str());
+
+            std::string lastErr = pData->db->GetSetting("cloud_sync_last_error", "");
+            SetDlgItemText(hDlg, IDC_STATIC_CLOUD_LAST_ERROR, Utils::Utf8ToWide(lastErr).c_str());
+        }
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        {
+            if (!pData) break;
+            int wmId = LOWORD(wParam);
+            int wmEvent = HIWORD(wParam);
+
+            if (wmEvent == BN_CLICKED) {
+                if (wmId == IDC_CHECK_CLOUD_SYNC_ENABLED) {
+                    pData->db->SetSetting("cloud_sync_enabled",
+                        IsDlgButtonChecked(hDlg, IDC_CHECK_CLOUD_SYNC_ENABLED) == BST_CHECKED ? "1" : "0");
+                } else if (wmId == IDC_CHECK_CLOUD_SYNC_ON_EXIT) {
+                    pData->db->SetSetting("cloud_sync_on_exit",
+                        IsDlgButtonChecked(hDlg, IDC_CHECK_CLOUD_SYNC_ON_EXIT) == BST_CHECKED ? "1" : "0");
+                } else if (wmId == IDC_BUTTON_CLOUD_CONNECT) {
+                    MessageBox(hDlg, L"Google Drive connection is not implemented yet.", L"Cloud Sync", MB_OK | MB_ICONINFORMATION);
+                } else if (wmId == IDC_BUTTON_CLOUD_DISCONNECT) {
+                    MessageBox(hDlg, L"Disconnect is not implemented yet.", L"Cloud Sync", MB_OK | MB_ICONINFORMATION);
+                } else if (wmId == IDC_BUTTON_CLOUD_SYNC_NOW) {
+                    MessageBox(hDlg, L"Sync is not implemented yet.", L"Cloud Sync", MB_OK | MB_ICONINFORMATION);
+                }
+            } else if (wmEvent == CBN_SELCHANGE) {
+                if (wmId == IDC_COMBO_CLOUD_SYNC_INTERVAL) {
+                    wchar_t buf[32];
+                    GetDlgItemText(hDlg, IDC_COMBO_CLOUD_SYNC_INTERVAL, buf, 32);
+                    pData->db->SetSetting("cloud_sync_interval_minutes", Utils::WideToUtf8(buf));
+                }
+            }
+        }
+        break;
+    }
+
     return (INT_PTR)FALSE;
 }
 
