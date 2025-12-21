@@ -13,9 +13,9 @@ VCPKG_TRIPLET=x86-windows
 
 CC=cl
 CFLAGS=/EHsc /DUNICODE /D_UNICODE /Iinclude /I"$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\include"
-LDFLAGS=/link /LIBPATH:"$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\lib" hunspell-1.7.lib intl.lib iconv.lib user32.lib gdi32.lib comctl32.lib shell32.lib comdlg32.lib
+LDFLAGS=/link /LIBPATH:"$(VCPKG_ROOT)\installed\$(VCPKG_TRIPLET)\lib" hunspell-1.7.lib intl.lib iconv.lib user32.lib gdi32.lib comctl32.lib shell32.lib comdlg32.lib advapi32.lib winhttp.lib bcrypt.lib ws2_32.lib
 
-SOURCES=src\main.cpp src\window.cpp src\database.cpp src\utils.cpp src\spell_checker.cpp src\settings_dialog.cpp lib\sqlite3.c
+SOURCES=src\main.cpp src\window.cpp src\database.cpp src\utils.cpp src\spell_checker.cpp src\settings_dialog.cpp src\credentials.cpp src\oauth_pkce.cpp lib\sqlite3.c
 TARGET=build\NoteSoFast.exe
 
 all: $(TARGET)

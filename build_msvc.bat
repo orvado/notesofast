@@ -22,7 +22,7 @@ if not exist build\dict mkdir build\dict
 rc /i src /fo build\resource.res src\resource.rc
 
 cl /EHsc /DUNICODE /D_UNICODE /Iinclude /Isrc /I"%VCPKG_INC%" src\*.cpp lib\sqlite3.c /Febuild\NoteSoFast.exe ^
-	/link build\resource.res /LIBPATH:"%VCPKG_LIB%" hunspell-1.7.lib intl.lib iconv.lib user32.lib gdi32.lib comctl32.lib shell32.lib comdlg32.lib
+    /link build\resource.res /LIBPATH:"%VCPKG_LIB%" hunspell-1.7.lib intl.lib iconv.lib user32.lib gdi32.lib comctl32.lib shell32.lib comdlg32.lib advapi32.lib winhttp.lib bcrypt.lib ws2_32.lib
 
 if exist dict\en\en_US.aff copy /Y dict\en\en_US.aff build\dict >nul
 if exist dict\en\en_US.dic copy /Y dict\en\en_US.dic build\dict >nul
