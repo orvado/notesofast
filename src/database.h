@@ -70,6 +70,9 @@ public:
     std::string GetSetting(const std::string& key, const std::string& defaultValue = "");
     bool SetSetting(const std::string& key, const std::string& value);
 
+    // Creates a consistent snapshot of the current database into a new SQLite file.
+    bool BackupToFile(const std::string& destDbPath);
+
 private:
     bool CreateSchema();
     bool InitializeColors();

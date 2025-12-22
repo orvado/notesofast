@@ -3,12 +3,14 @@
 #include "utils.h"
 #include "credentials.h"
 #include "oauth_pkce.h"
+#include "cloud_sync.h"
 #include <commctrl.h>
 #include <vector>
 #include <string>
 #include <map>
 #include <process.h>
 #include <memory>
+#include <fstream>
 
 // Forward declarations of procedures
 INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
@@ -17,9 +19,8 @@ INT_PTR CALLBACK MarkdownTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
 INT_PTR CALLBACK TagsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
-static const wchar_t* kCloudRefreshTokenCredTarget = L"NoteSoFast.GoogleDrive.RefreshToken";
-static const wchar_t* kCloudClientSecretCredTarget = L"NoteSoFast.GoogleDrive.ClientSecret";
 static const UINT WM_APP_CLOUD_CONNECT_DONE = WM_APP + 120;
+static const UINT WM_APP_CLOUD_SYNC_DONE = WM_APP + 121;
 
 struct CloudConnectResult {
     bool success = false;
@@ -45,7 +46,7 @@ static unsigned __stdcall CloudConnectThread(void* p) {
     // Store the refresh token on the worker thread so the connection persists
     // even if the Settings dialog closes before WM_APP_CLOUD_CONNECT_DONE is handled.
     if (res->success) {
-        if (!Credentials::WriteUtf8String(kCloudRefreshTokenCredTarget, res->refreshToken)) {
+        if (!Credentials::WriteUtf8String(CloudSync::kCloudRefreshTokenCredTarget, res->refreshToken)) {
             res->success = false;
             res->error = "Failed to store refresh token";
         }
@@ -62,10 +63,65 @@ struct SettingsData {
     HWND hPages[4];
     int currentPage;
     Database* db;
+    std::wstring dbPath;
 };
 
-void CreateSettingsDialog(HWND hWndParent, Database* db) {
-    DialogBoxParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_SETTINGS), hWndParent, SettingsDialogProc, (LPARAM)db);
+struct SettingsInitParams {
+    Database* db;
+    std::wstring dbPath;
+};
+
+struct CloudSyncThreadParams {
+    HWND hDlg;
+    Database* db;
+    std::wstring dbPath;
+    std::string clientId;
+};
+
+struct CloudSyncResultMsg {
+    bool success = false;
+    std::string error;
+    std::string remoteModifiedTime;
+    std::string localTime;
+};
+
+static std::string NowLocalTimeString() {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02u %02u:%02u:%02u",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    return std::string(buf);
+}
+
+static unsigned __stdcall CloudSyncNowThread(void* p) {
+    std::unique_ptr<CloudSyncThreadParams> params((CloudSyncThreadParams*)p);
+    std::unique_ptr<CloudSyncResultMsg> res(new CloudSyncResultMsg());
+
+    if (!params->db) {
+        res->error = "Missing database";
+        if (IsWindow(params->hDlg)) PostMessage(params->hDlg, WM_APP_CLOUD_SYNC_DONE, 0, (LPARAM)res.release());
+        return 0;
+    }
+
+    CloudSyncResult upload = CloudSync::UploadDatabaseSnapshot(params->db, params->dbPath, params->clientId);
+
+    res->success = upload.success;
+    res->error = upload.error;
+    res->remoteModifiedTime = upload.remoteModifiedTime;
+    res->localTime = NowLocalTimeString();
+
+    if (IsWindow(params->hDlg)) {
+        PostMessage(params->hDlg, WM_APP_CLOUD_SYNC_DONE, 0, (LPARAM)res.release());
+    }
+    return 0;
+}
+
+void CreateSettingsDialog(HWND hWndParent, Database* db, const std::wstring& dbPath) {
+    auto* init = new SettingsInitParams();
+    init->db = db;
+    init->dbPath = dbPath;
+    DialogBoxParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_SETTINGS), hWndParent, SettingsDialogProc, (LPARAM)init);
 }
 
 void OnSelChanged(HWND hDlg, SettingsData* pData) {
@@ -88,7 +144,9 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
     case WM_INITDIALOG:
         {
             pData = new SettingsData();
-            pData->db = (Database*)lParam;
+            std::unique_ptr<SettingsInitParams> init((SettingsInitParams*)lParam);
+            pData->db = init ? init->db : nullptr;
+            pData->dbPath = init ? init->dbPath : L"";
             SetWindowLongPtr(hDlg, GWLP_USERDATA, (LONG_PTR)pData);
 
             pData->hTab = GetDlgItem(hDlg, IDC_TAB_SETTINGS);
@@ -169,23 +227,25 @@ static void SetCloudStatusText(HWND hDlg, const std::wstring& text) {
 
 INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
     SettingsData* pData = (SettingsData*)GetWindowLongPtr(hDlg, GWLP_USERDATA);
+    static bool s_cloudInit = false;
 
     switch (message) {
     case WM_INITDIALOG:
         {
+            s_cloudInit = true;
             SetWindowLongPtr(hDlg, GWLP_USERDATA, lParam);
             pData = (SettingsData*)lParam;
 
             std::string clientId = pData->db->GetSetting("cloud_oauth_client_id", "");
             SetDlgItemText(hDlg, IDC_EDIT_CLOUD_CLIENT_ID, Utils::Utf8ToWide(clientId).c_str());
 
-            // Don't display the stored client secret; just keep it in Credential Manager.
-            SetDlgItemText(hDlg, IDC_EDIT_CLOUD_CLIENT_SECRET, L"");
+            // Don't display the stored client secret; keep it in Credential Manager.
+            // IMPORTANT: do not clear/delete it here.
 
             // Derive connection status from the presence of the refresh token.
             // Also self-heal the persisted status string to avoid stale UI.
             std::string refresh;
-            bool hasCred = Credentials::ReadUtf8String(kCloudRefreshTokenCredTarget, refresh);
+            bool hasCred = Credentials::ReadUtf8String(CloudSync::kCloudRefreshTokenCredTarget, refresh);
             if (hasCred) {
                 SetCloudStatusText(hDlg, L"Connected");
                 if (pData->db) pData->db->SetSetting("cloud_sync_status", "Connected");
@@ -218,6 +278,8 @@ INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM
 
             std::string lastErr = pData->db->GetSetting("cloud_sync_last_error", "");
             SetDlgItemText(hDlg, IDC_STATIC_CLOUD_LAST_ERROR, Utils::Utf8ToWide(lastErr).c_str());
+
+            s_cloudInit = false;
         }
         return (INT_PTR)TRUE;
 
@@ -253,6 +315,30 @@ INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM
         }
         return (INT_PTR)TRUE;
 
+    case WM_APP_CLOUD_SYNC_DONE:
+        {
+            std::unique_ptr<CloudSyncResultMsg> res((CloudSyncResultMsg*)lParam);
+
+            if (!pData || !pData->db) {
+                break;
+            }
+
+            EnableWindow(GetDlgItem(hDlg, IDC_BUTTON_CLOUD_SYNC_NOW), TRUE);
+
+            if (res && res->success) {
+                pData->db->SetSetting("cloud_last_sync_time", res->localTime);
+                pData->db->SetSetting("cloud_sync_last_error", "");
+                SetDlgItemText(hDlg, IDC_STATIC_CLOUD_LAST_SYNC, Utils::Utf8ToWide(res->localTime).c_str());
+                SetDlgItemText(hDlg, IDC_STATIC_CLOUD_LAST_ERROR, L"");
+            } else {
+                std::string err = res ? res->error : "Sync failed";
+                if (err.empty()) err = "Sync failed";
+                pData->db->SetSetting("cloud_sync_last_error", err);
+                SetDlgItemText(hDlg, IDC_STATIC_CLOUD_LAST_ERROR, Utils::Utf8ToWide(err).c_str());
+            }
+        }
+        return (INT_PTR)TRUE;
+
     case WM_COMMAND:
         {
             if (!pData) break;
@@ -279,10 +365,10 @@ INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM
                     GetDlgItemText(hDlg, IDC_EDIT_CLOUD_CLIENT_SECRET, secBuf, 512);
                     std::string clientSecret = Utils::WideToUtf8(secBuf);
                     if (!clientSecret.empty()) {
-                        Credentials::WriteUtf8String(kCloudClientSecretCredTarget, clientSecret);
+                        Credentials::WriteUtf8String(CloudSync::kCloudClientSecretCredTarget, clientSecret);
                     } else {
                         // If the field is empty, use any previously stored secret.
-                        Credentials::ReadUtf8String(kCloudClientSecretCredTarget, clientSecret);
+                        Credentials::ReadUtf8String(CloudSync::kCloudClientSecretCredTarget, clientSecret);
                     }
 
                     pData->db->SetSetting("cloud_oauth_client_id", clientId);
@@ -307,13 +393,36 @@ INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM
                         CloseHandle((HANDLE)th);
                     }
                 } else if (wmId == IDC_BUTTON_CLOUD_DISCONNECT) {
-                    Credentials::Delete(kCloudRefreshTokenCredTarget);
+                    Credentials::Delete(CloudSync::kCloudRefreshTokenCredTarget);
                     pData->db->SetSetting("cloud_sync_status", "Not connected");
                     SetCloudStatusText(hDlg, L"Not connected");
                     EnableWindow(GetDlgItem(hDlg, IDC_BUTTON_CLOUD_CONNECT), TRUE);
                     EnableWindow(GetDlgItem(hDlg, IDC_BUTTON_CLOUD_DISCONNECT), FALSE);
                 } else if (wmId == IDC_BUTTON_CLOUD_SYNC_NOW) {
-                    MessageBox(hDlg, L"Sync is not implemented yet.", L"Cloud Sync", MB_OK | MB_ICONINFORMATION);
+                    // Manual sync uploads a consistent DB snapshot.
+                    std::string clientId = pData->db->GetSetting("cloud_oauth_client_id", "");
+                    if (clientId.empty()) {
+                        MessageBox(hDlg, L"Enter your Google OAuth Client ID first.", L"Cloud Sync", MB_OK | MB_ICONWARNING);
+                        break;
+                    }
+
+                    EnableWindow(GetDlgItem(hDlg, IDC_BUTTON_CLOUD_SYNC_NOW), FALSE);
+                    SetDlgItemText(hDlg, IDC_STATIC_CLOUD_LAST_ERROR, L"");
+
+                    auto* params = new CloudSyncThreadParams();
+                    params->hDlg = hDlg;
+                    params->db = pData->db;
+                    params->dbPath = pData->dbPath;
+                    params->clientId = clientId;
+
+                    uintptr_t th = _beginthreadex(nullptr, 0, CloudSyncNowThread, params, 0, nullptr);
+                    if (th == 0) {
+                        delete params;
+                        EnableWindow(GetDlgItem(hDlg, IDC_BUTTON_CLOUD_SYNC_NOW), TRUE);
+                        MessageBox(hDlg, L"Failed to start sync thread.", L"Cloud Sync", MB_OK | MB_ICONERROR);
+                    } else {
+                        CloseHandle((HANDLE)th);
+                    }
                 }
             } else if (wmEvent == CBN_SELCHANGE) {
                 if (wmId == IDC_COMBO_CLOUD_SYNC_INTERVAL) {
@@ -327,13 +436,14 @@ INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM
                     GetDlgItemText(hDlg, IDC_EDIT_CLOUD_CLIENT_ID, buf, 512);
                     pData->db->SetSetting("cloud_oauth_client_id", Utils::WideToUtf8(buf));
                 } else if (wmId == IDC_EDIT_CLOUD_CLIENT_SECRET) {
+                    if (s_cloudInit) {
+                        break;
+                    }
                     wchar_t buf[512];
                     GetDlgItemText(hDlg, IDC_EDIT_CLOUD_CLIENT_SECRET, buf, 512);
                     std::string secret = Utils::WideToUtf8(buf);
-                    if (secret.empty()) {
-                        Credentials::Delete(kCloudClientSecretCredTarget);
-                    } else {
-                        Credentials::WriteUtf8String(kCloudClientSecretCredTarget, secret);
+                    if (!secret.empty()) {
+                        Credentials::WriteUtf8String(CloudSync::kCloudClientSecretCredTarget, secret);
                     }
                 }
             }

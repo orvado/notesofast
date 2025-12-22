@@ -76,6 +76,9 @@ protected:
     void ApplyLineMarkdown(const std::wstring& prefix, bool sequential = false);
     void UpdateStatusBarDbInfo();
     void UpdateStatusBarParts(int statusWidth);
+    void SyncDatabaseOnExitIfEnabled();
+    void ConfigureCloudSyncTimer();
+    void TriggerCloudSyncIfIdle();
 
     HWND m_hwnd;
     HWND m_hwndList;
@@ -125,6 +128,8 @@ protected:
     bool m_statusPartsConfigured = false;
     bool m_dbInfoNeedsRefresh = false;
     std::wstring m_dbPath;
+
+    bool m_cloudSyncInProgress = false;
 
     bool m_markdownPreviewMode = false;
     struct PreviewLink {

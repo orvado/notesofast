@@ -3,12 +3,16 @@
 #include "utils.h"
 #include "spell_checker.h"
 #include "settings_dialog.h"
+#include "cloud_sync.h"
+#include "credentials.h"
 #include "resource.h"
 #include <string>
 #include <algorithm>
 #include <memory>
 #include <cwctype>
 #include <cwchar>
+#include <cstdio>
+#include <process.h>
 
 static LONG GetRichEditTextLength(HWND hwnd) {
     GETTEXTLENGTHEX ltx = {};
@@ -249,6 +253,15 @@ static std::wstring FormatFileSize(ULONGLONG bytes) {
     return std::wstring(buffer);
 }
 
+static std::string NowLocalTimeStringA() {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02u %02u:%02u:%02u",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    return std::string(buf);
+}
+
 #ifdef max
 #undef max
 #endif
@@ -270,6 +283,37 @@ static std::wstring FormatFileSize(ULONGLONG bytes) {
 #define ID_MOVE_DOWN 11
 #define ID_PREVIEW 13
 #define ID_SPELLCHECK_TIMER 2001
+#define ID_CLOUDSYNC_TIMER 2002
+
+static const UINT WM_APP_CLOUD_AUTO_SYNC_DONE = WM_APP + 130;
+
+struct CloudAutoSyncThreadParams {
+    HWND hwnd;
+    Database* db;
+    std::wstring dbPath;
+    std::string clientId;
+};
+
+struct CloudAutoSyncResultMsg {
+    bool success = false;
+    std::string error;
+    std::string localTime;
+};
+
+static unsigned __stdcall CloudAutoSyncThread(void* p) {
+    std::unique_ptr<CloudAutoSyncThreadParams> params((CloudAutoSyncThreadParams*)p);
+    std::unique_ptr<CloudAutoSyncResultMsg> res(new CloudAutoSyncResultMsg());
+
+    CloudSyncResult r = CloudSync::UploadDatabaseSnapshot(params->db, params->dbPath, params->clientId);
+    res->success = r.success;
+    res->error = r.error;
+    res->localTime = NowLocalTimeStringA();
+
+    if (IsWindow(params->hwnd)) {
+        PostMessage(params->hwnd, WM_APP_CLOUD_AUTO_SYNC_DONE, 0, (LPARAM)res.release());
+    }
+    return 0;
+}
 
 #define IDM_NEW 101
 #define IDM_SAVE 102
@@ -371,15 +415,25 @@ MainWindow::~MainWindow() {
 }
 
 BOOL MainWindow::Create(PCWSTR lpWindowName, DWORD dwStyle, DWORD dwExStyle, int x, int y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu) {
-    WNDCLASS wc = {0};
+    HINSTANCE hInst = GetModuleHandle(NULL);
+
+    WNDCLASSEXW wc = {0};
+    wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = MainWindow::WindowProc;
-    wc.hInstance = GetModuleHandle(NULL);
+    wc.hInstance = hInst;
     wc.lpszClassName = L"NoteSoFastWindowClass";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR);
+    wc.hIconSm = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
 
-    RegisterClass(&wc);
+    RegisterClassExW(&wc);
 
-    m_hwnd = CreateWindowEx(dwExStyle, L"NoteSoFastWindowClass", lpWindowName, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, GetModuleHandle(NULL), this);
+    m_hwnd = CreateWindowEx(dwExStyle, L"NoteSoFastWindowClass", lpWindowName, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, hInst, this);
+
+    if (m_hwnd) {
+        if (wc.hIcon) SendMessageW(m_hwnd, WM_SETICON, ICON_BIG, (LPARAM)wc.hIcon);
+        if (wc.hIconSm) SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)wc.hIconSm);
+    }
 
     return (m_hwnd ? TRUE : FALSE);
 }
@@ -427,14 +481,34 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_TIMER:
         OnTimer(wParam);
         return 0;
+    case WM_APP_CLOUD_AUTO_SYNC_DONE:
+        {
+            std::unique_ptr<CloudAutoSyncResultMsg> res((CloudAutoSyncResultMsg*)lParam);
+            m_cloudSyncInProgress = false;
+
+            if (m_db && res) {
+                if (res->success) {
+                    m_db->SetSetting("cloud_last_sync_time", res->localTime);
+                    m_db->SetSetting("cloud_sync_last_error", "");
+                } else {
+                    if (!res->error.empty()) {
+                        m_db->SetSetting("cloud_sync_last_error", res->error);
+                    }
+                }
+            }
+        }
+        return 0;
     case WM_CLOSE:
         SaveCurrentNote();
+        KillTimer(m_hwnd, ID_CLOUDSYNC_TIMER);
+        SyncDatabaseOnExitIfEnabled();
         DestroyWindow(m_hwnd);
         return 0;
     case WM_DESTROY:
         SaveCurrentNote();
         UnregisterHotkeys();
         KillTimer(m_hwnd, ID_SPELLCHECK_TIMER);
+        KillTimer(m_hwnd, ID_CLOUDSYNC_TIMER);
         PostQuitMessage(0);
         return 0;
     case WM_LBUTTONDOWN:
@@ -497,6 +571,35 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         return 0;
     default:
         return DefWindowProc(m_hwnd, uMsg, wParam, lParam);
+    }
+}
+
+void MainWindow::SyncDatabaseOnExitIfEnabled() {
+    if (!m_db) {
+        return;
+    }
+    if (m_cloudSyncInProgress) {
+        return;
+    }
+    if (m_db->GetSetting("cloud_sync_enabled", "0") != "1") {
+        return;
+    }
+    if (m_db->GetSetting("cloud_sync_on_exit", "1") != "1") {
+        return;
+    }
+    const std::string clientId = m_db->GetSetting("cloud_oauth_client_id", "");
+    if (clientId.empty()) {
+        return;
+    }
+
+    CloudSyncResult r = CloudSync::UploadDatabaseSnapshot(m_db, m_dbPath, clientId);
+    if (r.success) {
+        m_db->SetSetting("cloud_last_sync_time", NowLocalTimeStringA());
+        m_db->SetSetting("cloud_sync_last_error", "");
+    } else {
+        if (!r.error.empty()) {
+            m_db->SetSetting("cloud_sync_last_error", r.error);
+        }
     }
 }
 
@@ -972,6 +1075,7 @@ void MainWindow::SetDatabasePath(const std::wstring& path) {
     if (m_statusPartsConfigured) {
         UpdateStatusBarDbInfo();
     }
+    ConfigureCloudSyncTimer();
 }
 
 void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
@@ -1058,7 +1162,8 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         NavigateHistory(1);
         break;
     case IDM_SETTINGS:
-        CreateSettingsDialog(m_hwnd, m_db);
+        CreateSettingsDialog(m_hwnd, m_db, m_dbPath);
+        ConfigureCloudSyncTimer();
         break;
     case IDM_TAG_FILTER_BUTTON:
         {
@@ -2924,7 +3029,87 @@ void MainWindow::OnTimer(UINT_PTR timerId) {
     if (timerId == ID_SPELLCHECK_TIMER) {
         KillTimer(m_hwnd, ID_SPELLCHECK_TIMER);
         RunSpellCheck();
+        return;
     }
+    if (timerId == ID_CLOUDSYNC_TIMER) {
+        TriggerCloudSyncIfIdle();
+    }
+}
+
+void MainWindow::ConfigureCloudSyncTimer() {
+    if (!m_hwnd) {
+        return;
+    }
+    KillTimer(m_hwnd, ID_CLOUDSYNC_TIMER);
+
+    if (!m_db) {
+        return;
+    }
+    if (m_db->GetSetting("cloud_sync_enabled", "0") != "1") {
+        return;
+    }
+    if (m_dbPath.empty()) {
+        return;
+    }
+
+    int minutes = 30;
+    try {
+        std::string s = m_db->GetSetting("cloud_sync_interval_minutes", "30");
+        if (!s.empty()) {
+            minutes = std::stoi(s);
+        }
+    } catch (...) {
+        minutes = 30;
+    }
+
+    if (minutes <= 0) {
+        return;
+    }
+
+    // Clamp to avoid overflow and silly values.
+    if (minutes < 1) minutes = 1;
+    if (minutes > 24 * 60) minutes = 24 * 60;
+
+    const UINT intervalMs = (UINT)(minutes * 60u * 1000u);
+    SetTimer(m_hwnd, ID_CLOUDSYNC_TIMER, intervalMs, NULL);
+}
+
+void MainWindow::TriggerCloudSyncIfIdle() {
+    if (m_cloudSyncInProgress) {
+        return;
+    }
+    if (!m_db || m_dbPath.empty()) {
+        return;
+    }
+    if (m_db->GetSetting("cloud_sync_enabled", "0") != "1") {
+        return;
+    }
+
+    const std::string clientId = m_db->GetSetting("cloud_oauth_client_id", "");
+    if (clientId.empty()) {
+        return;
+    }
+
+    // Skip if not connected.
+    std::string refresh;
+    if (!Credentials::ReadUtf8String(CloudSync::kCloudRefreshTokenCredTarget, refresh) || refresh.empty()) {
+        return;
+    }
+
+    m_cloudSyncInProgress = true;
+    auto* params = new CloudAutoSyncThreadParams();
+    params->hwnd = m_hwnd;
+    params->db = m_db;
+    params->dbPath = m_dbPath;
+    params->clientId = clientId;
+
+    uintptr_t th = _beginthreadex(nullptr, 0, CloudAutoSyncThread, params, 0, nullptr);
+    if (th == 0) {
+        delete params;
+        m_cloudSyncInProgress = false;
+        return;
+    }
+    CloseHandle((HANDLE)th);
 }
 
 void MainWindow::ScheduleSpellCheck() {

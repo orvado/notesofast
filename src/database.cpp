@@ -81,6 +81,31 @@ bool Database::Initialize(const std::string& dbPath) {
     return InitializeColors();
 }
 
+bool Database::BackupToFile(const std::string& destDbPath) {
+    if (!m_db) {
+        return false;
+    }
+
+    sqlite3* outDb = nullptr;
+    if (sqlite3_open(destDbPath.c_str(), &outDb) != SQLITE_OK) {
+        if (outDb) sqlite3_close(outDb);
+        return false;
+    }
+
+    sqlite3_backup* backup = sqlite3_backup_init(outDb, "main", m_db, "main");
+    if (!backup) {
+        sqlite3_close(outDb);
+        return false;
+    }
+
+    int rc = sqlite3_backup_step(backup, -1);
+    sqlite3_backup_finish(backup);
+
+    bool ok = (rc == SQLITE_DONE);
+    sqlite3_close(outDb);
+    return ok;
+}
+
 std::vector<Note> Database::GetAllNotes(bool includeArchived, SortBy sortBy) {
     std::vector<Note> notes;
     std::string sql = "SELECT id, title, content, color_id, is_archived, is_pinned, is_checklist, created_at, modified_at FROM notes ";

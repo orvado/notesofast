@@ -3,6 +3,16 @@
 #include "window.h"
 #include "database.h"
 #include "utils.h"
+#include "cloud_sync.h"
+
+static std::string NowLocalTimeString() {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02u %02u:%02u:%02u",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    return std::string(buf);
+}
 
 static std::wstring ResolveDatabasePath() {
     wchar_t exePath[MAX_PATH];
@@ -45,6 +55,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (!db.Initialize(dbPath)) {
         MessageBox(NULL, L"Failed to initialize database.", L"Error", MB_OK | MB_ICONERROR);
         return 1;
+    }
+
+    // Auto-restore from cloud if enabled and remote copy is newer.
+    bool restored = false;
+    CloudSyncResult restoreRes;
+    const bool cloudEnabled = (db.GetSetting("cloud_sync_enabled", "0") == "1");
+    const std::string clientId = db.GetSetting("cloud_oauth_client_id", "");
+    if (cloudEnabled && !clientId.empty()) {
+        db.Close();
+        restoreRes = CloudSync::RestoreDatabaseIfRemoteNewer(dbPathW, clientId, restored);
+        // Re-open DB after restore attempt.
+        if (!db.Initialize(dbPath)) {
+            MessageBox(NULL, L"Failed to initialize database.", L"Error", MB_OK | MB_ICONERROR);
+            return 1;
+        }
+        if (!restoreRes.success && !restoreRes.error.empty()) {
+            db.SetSetting("cloud_sync_last_error", restoreRes.error);
+        } else if (restored) {
+            db.SetSetting("cloud_sync_last_error", "");
+            db.SetSetting("cloud_last_restore_time", NowLocalTimeString());
+        }
     }
 
     MainWindow window(&db);

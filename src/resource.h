@@ -53,6 +53,9 @@
 #define IDM_SETTINGS 3001
 #define IDM_TAG_FILTER_LABEL 3002
 #define IDM_TAG_FILTER_BUTTON 3003
+
+// Icons
+#define IDI_APP 4000
 #define IDI_SETTINGS 4001
 
 // Markdown Toolbar
