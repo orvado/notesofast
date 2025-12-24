@@ -3,6 +3,23 @@
 
 IDI_APP ICON "..\\resources\\icons\\NoteSoFast.ico"
 
+IDI_MD_BOLD ICON "..\\resources\\icons\\bold.ico"
+IDI_MD_ITALIC ICON "..\\resources\\icons\\italic.ico"
+IDI_MD_STRIKETHROUGH ICON "..\\resources\\icons\\strikethrough.ico"
+IDI_MD_BLOCKQUOTE ICON "..\\resources\\icons\\blockquote.ico"
+IDI_MD_NUMBERLIST ICON "..\\resources\\icons\\numberlist.ico"
+IDI_MD_BULLETLIST ICON "..\\resources\\icons\\bulletlist.ico"
+IDI_MD_SUBSCRIPT ICON "..\\resources\\icons\\subscript.ico"
+IDI_MD_SUPERSCRIPT ICON "..\\resources\\icons\\superscript.ico"
+IDI_MD_TABLE ICON "..\\resources\\icons\\table.ico"
+IDI_MD_LINK ICON "..\\resources\\icons\\link.ico"
+IDI_MD_VIEW ICON "..\\resources\\icons\\view.ico"
+IDI_MD_UNDO ICON "..\\resources\\icons\\undo.ico"
+IDI_MD_REDO ICON "..\\resources\\icons\\redo.ico"
+
+// Enable Common Controls v6 (visual styles + proper alpha rendering for imagelists)
+1 24 "NoteSoFast.manifest"
+
 // Settings Dialog
 IDD_SETTINGS DIALOGEX 0, 0, 250, 230
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU

@@ -412,6 +412,10 @@ MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdi
 
 MainWindow::~MainWindow() {
     if (m_hFont) DeleteObject(m_hFont);
+    if (m_hMarkdownToolbarImages) {
+        ImageList_Destroy(m_hMarkdownToolbarImages);
+        m_hMarkdownToolbarImages = NULL;
+    }
 }
 
 BOOL MainWindow::Create(PCWSTR lpWindowName, DWORD dwStyle, DWORD dwExStyle, int x, int y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu) {
@@ -827,61 +831,160 @@ void MainWindow::OnCreate() {
     SendMessage(m_hwndToolbar, TB_ADDBUTTONS, 2, (LPARAM)&tbbTag);
 
     // Create Markdown Toolbar (initially hidden or shown depending on mode)
+    // Use mixed buttons: most are icon-only, but some (Header, Tag) show text.
     m_hwndMarkdownToolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL, 
         WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | TBSTYLE_LIST | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, 
         0, 0, 0, 0, m_hwnd, (HMENU)ID_MARKDOWN_TOOLBAR, GetModuleHandle(NULL), NULL);
     SendMessage(m_hwndMarkdownToolbar, TB_BUTTONSTRUCTSIZE, (WPARAM)sizeof(TBBUTTON), 0);
 
-    // Add strings for markdown buttons
-    int iMBold = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"B\0");
-    int iMItalic = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"I\0");
-    int iMStrike = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"S\0");
+    // Ensure text (for mixed buttons) stays on one row.
+    SendMessage(m_hwndMarkdownToolbar, TB_SETMAXTEXTROWS, 1, 0);
+
+    // Allow some buttons to display text next to (or without) images.
+    {
+        DWORD ex = (DWORD)SendMessage(m_hwndMarkdownToolbar, TB_GETEXTENDEDSTYLE, 0, 0);
+        ex |= TBSTYLE_EX_MIXEDBUTTONS;
+        SendMessage(m_hwndMarkdownToolbar, TB_SETEXTENDEDSTYLE, 0, (LPARAM)ex);
+    }
+
+    // Keep markdown toolbar buttons aligned with the main toolbar sizing (but never smaller than the icon size)
+    DWORD mainBtnSize = (DWORD)SendMessage(m_hwndToolbar, TB_GETBUTTONSIZE, 0, 0);
+    int mdBtnW = (mainBtnSize != 0) ? (int)LOWORD(mainBtnSize) : 0;
+    int mdBtnH = (mainBtnSize != 0) ? (int)HIWORD(mainBtnSize) : 0;
+
+    // Render toolbar icons at 24x24 (good visual balance and fits typical toolbar heights without clipping).
+    const int iconCx = 24;
+    const int iconCy = 24;
+
+    if (mdBtnW <= 0) mdBtnW = iconCx + 8;
+    if (mdBtnH <= 0) mdBtnH = iconCy + 8;
+    if (mdBtnW < iconCx + 8) mdBtnW = iconCx + 8;
+    if (mdBtnH < iconCy + 8) mdBtnH = iconCy + 8;
+    SendMessage(m_hwndMarkdownToolbar, TB_SETBUTTONSIZE, 0, MAKELONG(mdBtnW, mdBtnH));
+
+    // Icon imagelist for markdown toolbar
+    SendMessage(m_hwndMarkdownToolbar, TB_SETBITMAPSIZE, 0, MAKELONG(iconCx, iconCy));
+
+    if (m_hMarkdownToolbarImages) {
+        ImageList_Destroy(m_hMarkdownToolbarImages);
+        m_hMarkdownToolbarImages = NULL;
+    }
+    // Use 32-bit imagelist for crisp icons; avoid masks which can degrade alpha edges.
+    m_hMarkdownToolbarImages = ImageList_Create(iconCx, iconCy, ILC_COLOR32, 16, 8);
+    if (m_hMarkdownToolbarImages) {
+        ImageList_SetBkColor(m_hMarkdownToolbarImages, CLR_NONE);
+    }
+
+    auto addResIcon = [&](int resId) -> int {
+        if (!m_hMarkdownToolbarImages) return I_IMAGENONE;
+        HICON hIcon = NULL;
+        // Load the icon at the requested size. Keeping this to LoadImageW avoids COMCTL32 ordinal imports
+        // that can prevent the app from starting on systems without newer common-controls.
+        hIcon = (HICON)LoadImageW(GetModuleHandle(NULL), MAKEINTRESOURCEW(resId), IMAGE_ICON, iconCx, iconCy, LR_DEFAULTCOLOR);
+        if (!hIcon) return I_IMAGENONE;
+
+        // Render into a 32-bit DIB and add that to the imagelist.
+        // This produces cleaner results than ImageList_AddIcon on some systems.
+        BITMAPV5HEADER bi = {};
+        bi.bV5Size = sizeof(BITMAPV5HEADER);
+        bi.bV5Width = iconCx;
+        bi.bV5Height = -iconCy; // top-down
+        bi.bV5Planes = 1;
+        bi.bV5BitCount = 32;
+        bi.bV5Compression = BI_BITFIELDS;
+        bi.bV5RedMask = 0x00FF0000;
+        bi.bV5GreenMask = 0x0000FF00;
+        bi.bV5BlueMask = 0x000000FF;
+        bi.bV5AlphaMask = 0xFF000000;
+
+        void* pvBits = nullptr;
+        HDC hdc = GetDC(m_hwnd);
+        HBITMAP hbm = CreateDIBSection(hdc, (BITMAPINFO*)&bi, DIB_RGB_COLORS, &pvBits, NULL, 0);
+        if (hdc) ReleaseDC(m_hwnd, hdc);
+
+        int idx = I_IMAGENONE;
+        if (hbm) {
+            HDC memdc = CreateCompatibleDC(NULL);
+            HGDIOBJ old = SelectObject(memdc, hbm);
+            if (pvBits) {
+                memset(pvBits, 0, (size_t)iconCx * (size_t)iconCy * 4);
+            }
+            DrawIconEx(memdc, 0, 0, hIcon, iconCx, iconCy, 0, NULL, DI_NORMAL);
+            SelectObject(memdc, old);
+            DeleteDC(memdc);
+
+            int added = ImageList_Add(m_hMarkdownToolbarImages, hbm, NULL);
+            if (added >= 0) idx = added;
+            DeleteObject(hbm);
+        } else {
+            int added = ImageList_AddIcon(m_hMarkdownToolbarImages, hIcon);
+            if (added >= 0) idx = added;
+        }
+
+        DestroyIcon(hIcon);
+        return (idx >= 0) ? idx : I_IMAGENONE;
+    };
+
+    int imgBold = addResIcon(IDI_MD_BOLD);
+    int imgItalic = addResIcon(IDI_MD_ITALIC);
+    int imgStrike = addResIcon(IDI_MD_STRIKETHROUGH);
+    int imgQuote = addResIcon(IDI_MD_BLOCKQUOTE);
+    int imgOL = addResIcon(IDI_MD_NUMBERLIST);
+    int imgUL = addResIcon(IDI_MD_BULLETLIST);
+    int imgSub = addResIcon(IDI_MD_SUBSCRIPT);
+    int imgSuper = addResIcon(IDI_MD_SUPERSCRIPT);
+    int imgTable = addResIcon(IDI_MD_TABLE);
+    int imgLink = addResIcon(IDI_MD_LINK);
+    int imgView = addResIcon(IDI_MD_VIEW);
+    int imgUndo = addResIcon(IDI_MD_UNDO);
+    int imgRedo = addResIcon(IDI_MD_REDO);
+
+    SendMessage(m_hwndMarkdownToolbar, TB_SETIMAGELIST, 0, (LPARAM)m_hMarkdownToolbarImages);
+
     int iMPara = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Header\0");
-    int iMQuote = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"\"\0");
-    int iMOL = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"1. \x2014\0");
-    int iMUL = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"\x2022 \x2014\0");
-    int iMLink = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Link\0");
     int iMLine = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Line\0");
-    int iMPreview = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"View\0");
-    int iMUndo = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Undo\0");
-    int iMRedo = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Redo\0");
     int iMTagButton = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"<None>\0");
 
     TBBUTTON mtbb[20];
     ZeroMemory(mtbb, sizeof(mtbb));
 
     int i = 0;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_BOLD; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMBold; i++;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_ITALIC; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMItalic; i++;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_STRIKE; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMStrike; i++;
+    mtbb[i].iBitmap = imgBold; mtbb[i].idCommand = IDM_MARKDOWN_BOLD; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    mtbb[i].iBitmap = imgItalic; mtbb[i].idCommand = IDM_MARKDOWN_ITALIC; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    mtbb[i].iBitmap = imgStrike; mtbb[i].idCommand = IDM_MARKDOWN_STRIKE; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_PARA; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_DROPDOWN | BTNS_AUTOSIZE; mtbb[i].iString = iMPara; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_PARA; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_DROPDOWN | BTNS_AUTOSIZE | BTNS_SHOWTEXT; mtbb[i].iString = iMPara; i++;
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_QUOTE; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMQuote; i++;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_OL; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMOL; i++;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_UL; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMUL; i++;
+    mtbb[i].iBitmap = imgQuote; mtbb[i].idCommand = IDM_MARKDOWN_QUOTE; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    mtbb[i].iBitmap = imgOL; mtbb[i].idCommand = IDM_MARKDOWN_OL; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    mtbb[i].iBitmap = imgUL; mtbb[i].idCommand = IDM_MARKDOWN_UL; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+
+    // New (currently no-op) buttons: Subscript / Superscript / Table
+    mtbb[i].iBitmap = imgSub; mtbb[i].idCommand = IDM_MARKDOWN_SUBSCRIPT; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    mtbb[i].iBitmap = imgSuper; mtbb[i].idCommand = IDM_MARKDOWN_SUPERSCRIPT; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    mtbb[i].iBitmap = imgTable; mtbb[i].idCommand = IDM_MARKDOWN_TABLE; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_LINK; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMLink; i++;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_HR; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMLine; i++;
+    mtbb[i].iBitmap = imgLink; mtbb[i].idCommand = IDM_MARKDOWN_LINK; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_HR; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT; mtbb[i].iString = iMLine; i++;
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_PREVIEW; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMPreview; i++;
+    mtbb[i].iBitmap = imgView; mtbb[i].idCommand = IDM_MARKDOWN_PREVIEW; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_UNDO; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMUndo; i++;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_REDO; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMRedo; i++;
+    mtbb[i].iBitmap = imgUndo; mtbb[i].idCommand = IDM_MARKDOWN_UNDO; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    mtbb[i].iBitmap = imgRedo; mtbb[i].idCommand = IDM_MARKDOWN_REDO; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
 
     // Tag button lives inside the markdown toolbar so it renders like other toolbar buttons (e.g., View)
     mtbb[i].fsStyle = BTNS_SEP; i++;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_NOTE_TAG_BUTTON; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = iMTagButton; i++;
+    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_NOTE_TAG_BUTTON; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT; mtbb[i].iString = iMTagButton; i++;
 
     SendMessage(m_hwndMarkdownToolbar, TB_ADDBUTTONS, i, (LPARAM)&mtbb);
 
@@ -1000,7 +1103,15 @@ void MainWindow::OnSize(int width, int height) {
         
         ShowWindow(m_hwndMarkdownToolbar, SW_HIDE);
     } else {
-        int markdownToolbarHeight = 30;
+        // Size to fit the markdown toolbar's button height (prevents icon clipping).
+        int markdownToolbarHeight = toolbarHeight;
+        if (m_hwndMarkdownToolbar) {
+            DWORD mdBtnSize = (DWORD)SendMessage(m_hwndMarkdownToolbar, TB_GETBUTTONSIZE, 0, 0);
+            int mdBtnH = (mdBtnSize != 0) ? (int)HIWORD(mdBtnSize) : 0;
+            if (mdBtnH > 0) {
+                markdownToolbarHeight = std::max(markdownToolbarHeight, mdBtnH + 4);
+            }
+        }
 
         if (m_markdownPreviewMode) {
             ShowWindow(m_hwndMarkdownToolbar, SW_HIDE);
@@ -1013,6 +1124,7 @@ void MainWindow::OnSize(int width, int height) {
             ShowWindow(m_hwndEdit, SW_SHOW);
             ShowWindow(m_hwndPreview, SW_HIDE);
 
+            SendMessage(m_hwndMarkdownToolbar, TB_AUTOSIZE, 0, 0);
             MoveWindow(m_hwndMarkdownToolbar, rightPaneX, toolbarHeight, rightPaneWidth, markdownToolbarHeight, TRUE);
             MoveWindow(m_hwndEdit, rightPaneX, toolbarHeight + markdownToolbarHeight, rightPaneWidth, clientHeight - markdownToolbarHeight, TRUE);
         }
@@ -1241,6 +1353,11 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_MARKDOWN_PREVIEW:
         ToggleMarkdownPreview();
         break;
+    case IDM_MARKDOWN_SUBSCRIPT:
+    case IDM_MARKDOWN_SUPERSCRIPT:
+    case IDM_MARKDOWN_TABLE:
+        // No-op for now (buttons are present but not implemented yet)
+        break;
     case IDM_MARKDOWN_UNDO:
         SendMessage(m_hwndEdit, EM_UNDO, 0, 0);
         break;
@@ -1447,7 +1564,10 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             case IDM_MARKDOWN_UL: wcscpy_s(pInfo->szText, L"Bullet List"); break;
             case IDM_MARKDOWN_LINK: wcscpy_s(pInfo->szText, L"Insert Link"); break;
             case IDM_MARKDOWN_HR: wcscpy_s(pInfo->szText, L"Horizontal Line"); break;
-            case IDM_MARKDOWN_PREVIEW: wcscpy_s(pInfo->szText, L"Preview Markdown"); break;
+            case IDM_MARKDOWN_SUBSCRIPT: wcscpy_s(pInfo->szText, L"Subscript"); break;
+            case IDM_MARKDOWN_SUPERSCRIPT: wcscpy_s(pInfo->szText, L"Superscript"); break;
+            case IDM_MARKDOWN_TABLE: wcscpy_s(pInfo->szText, L"Insert Table"); break;
+            case IDM_MARKDOWN_PREVIEW: wcscpy_s(pInfo->szText, L"View"); break;
             case IDM_MARKDOWN_UNDO: wcscpy_s(pInfo->szText, L"Undo"); break;
             case IDM_MARKDOWN_REDO: wcscpy_s(pInfo->szText, L"Redo"); break;
         }

@@ -131,6 +131,8 @@ protected:
 
     bool m_cloudSyncInProgress = false;
 
+    HIMAGELIST m_hMarkdownToolbarImages = NULL;
+
     bool m_markdownPreviewMode = false;
     struct PreviewLink {
         CHARRANGE range;
