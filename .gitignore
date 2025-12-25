@@ -7,3 +7,4 @@ build/
 *.log
 dict/
 Settings Tabbed Dialog.txt
+/resources/icons/*.png

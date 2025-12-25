@@ -339,6 +339,8 @@ static unsigned __stdcall CloudAutoSyncThread(void* p) {
 WNDPROC g_oldEditProc = NULL;
 WNDPROC g_oldSearchProc = NULL;
 
+static const wchar_t* kSearchCueText = L"Search (\x2191\x2193 for History)";
+
 static LRESULT CALLBACK PreviewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR idSubclass, DWORD_PTR refData) {
     if (uMsg == WM_LBUTTONDBLCLK) {
         // Double-clicking preview returns to editable mode.
@@ -382,6 +384,38 @@ LRESULT CALLBACK SearchEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             }
             return 0;
         }
+    }
+
+    // Custom cue banner drawing:
+    // - Avoids source-encoding issues for arrow glyphs
+    // - Guarantees system gray cue text color
+    if (uMsg == WM_PAINT) {
+        LRESULT r = CallWindowProc(g_oldSearchProc, hwnd, uMsg, wParam, lParam);
+
+        if (GetWindowTextLengthW(hwnd) == 0) {
+            HDC hdc = GetDC(hwnd);
+            if (hdc) {
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                rc.left += 4;
+
+                HFONT hFont = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
+                HGDIOBJ oldFont = hFont ? SelectObject(hdc, hFont) : NULL;
+
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, GetSysColor(COLOR_GRAYTEXT));
+                DrawTextW(hdc, kSearchCueText, -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+                if (oldFont) SelectObject(hdc, oldFont);
+                ReleaseDC(hwnd, hdc);
+            }
+        }
+
+        return r;
+    }
+
+    if (uMsg == WM_SETFOCUS || uMsg == WM_KILLFOCUS || uMsg == WM_SETTEXT || uMsg == WM_KEYUP || uMsg == WM_CHAR) {
+        InvalidateRect(hwnd, NULL, TRUE);
     }
     
     return CallWindowProc(g_oldSearchProc, hwnd, uMsg, wParam, lParam);
@@ -621,7 +655,7 @@ void MainWindow::OnCreate() {
     m_hwndSearch = CreateWindow(L"EDIT", L"", 
         WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_SEARCH, GetModuleHandle(NULL), NULL);
-    SendMessage(m_hwndSearch, EM_SETCUEBANNER, TRUE, (LPARAM)L"Search (↑↓ for History)");
+    // Cue banner is custom drawn in SearchEditProc to ensure correct glyphs + gray color.
     
     // Subclass search box to handle arrow keys
     g_oldSearchProc = (WNDPROC)SetWindowLongPtr(m_hwndSearch, GWLP_WNDPROC, (LONG_PTR)SearchEditProc);
