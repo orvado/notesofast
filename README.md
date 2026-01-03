@@ -6,6 +6,8 @@ A lightweight, native Windows note-taking application built with Win32 API, SQLi
 
 ### Core Features
 - **Create, Edit, Delete Notes**: Intuitive interface for managing text notes
+- **Checklist Support**: Special checklist type for organizing subtasks
+- **Tag Notes**: Organize and group notes or checklist using custom tags
 - **Auto-Save**: Automatic persistence when switching notes or explicit save via toolbar
 - **Search & Filter**: Quick search across note titles and content
 - **Syntax Highlighting**: Color-coded note titles in the list view
