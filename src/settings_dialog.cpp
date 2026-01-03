@@ -17,6 +17,7 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
 INT_PTR CALLBACK AppearanceTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK MarkdownTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK TagsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+INT_PTR CALLBACK SnippetsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK CloudSyncTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
 static const UINT WM_APP_CLOUD_CONNECT_DONE = WM_APP + 120;
@@ -60,7 +61,7 @@ static unsigned __stdcall CloudConnectThread(void* p) {
 
 struct SettingsData {
     HWND hTab;
-    HWND hPages[4];
+    HWND hPages[5];
     int currentPage;
     Database* db;
     std::wstring dbPath;
@@ -127,7 +128,7 @@ void CreateSettingsDialog(HWND hWndParent, Database* db, const std::wstring& dbP
 void OnSelChanged(HWND hDlg, SettingsData* pData) {
     int iSel = TabCtrl_GetCurSel(pData->hTab);
     
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         if (i == iSel) {
             ShowWindow(pData->hPages[i], SW_SHOW);
         } else {
@@ -160,8 +161,10 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             TabCtrl_InsertItem(pData->hTab, 1, &tie);
             tie.pszText = (LPWSTR)L"Tags";
             TabCtrl_InsertItem(pData->hTab, 2, &tie);
-            tie.pszText = (LPWSTR)L"Cloud Sync";
+            tie.pszText = (LPWSTR)L"Snippets";
             TabCtrl_InsertItem(pData->hTab, 3, &tie);
+            tie.pszText = (LPWSTR)L"Cloud Sync";
+            TabCtrl_InsertItem(pData->hTab, 4, &tie);
 
             RECT rcTab;
             GetWindowRect(pData->hTab, &rcTab);
@@ -171,9 +174,10 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             pData->hPages[0] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_APPEARANCE), hDlg, AppearanceTabProc, (LPARAM)pData);
             pData->hPages[1] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_MARKDOWN), hDlg, MarkdownTabProc, (LPARAM)pData);
             pData->hPages[2] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_TAGS), hDlg, TagsTabProc, (LPARAM)pData);
-            pData->hPages[3] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_CLOUD_SYNC), hDlg, CloudSyncTabProc, (LPARAM)pData);
+            pData->hPages[3] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_SNIPPETS), hDlg, SnippetsTabProc, (LPARAM)pData);
+            pData->hPages[4] = CreateDialogParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_TAB_CLOUD_SYNC), hDlg, CloudSyncTabProc, (LPARAM)pData);
 
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 5; i++) {
                 MoveWindow(pData->hPages[i], rcTab.left, rcTab.top, rcTab.right - rcTab.left, rcTab.bottom - rcTab.top, FALSE);
             }
 
@@ -204,7 +208,7 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
 
     case WM_DESTROY:
         if (pData) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 5; i++) {
                 if (pData->hPages[i]) DestroyWindow(pData->hPages[i]);
             }
             delete pData;
@@ -584,6 +588,20 @@ INT_PTR CALLBACK TagsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPar
     HWND hList = GetDlgItem(hDlg, IDC_LIST_TAGS);
     static int editingIdx = -1;
 
+    auto sizeColumns = [&]() {
+        if (!hList) return;
+        RECT rc;
+        GetClientRect(hList, &rc);
+        int listWidth = rc.right - rc.left;
+        int usageWidth = 60;
+        int idWidth = 0;
+        int remaining = listWidth - usageWidth - idWidth - 4;
+        if (remaining < 80) remaining = 80;
+        ListView_SetColumnWidth(hList, 0, remaining);
+        ListView_SetColumnWidth(hList, 1, usageWidth);
+        ListView_SetColumnWidth(hList, 2, 0);
+    };
+
     switch (message) {
     case WM_INITDIALOG:
         {
@@ -606,6 +624,8 @@ INT_PTR CALLBACK TagsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPar
             lvc.pszText = (LPWSTR)L"ID";
             lvc.cx = 0; // Hidden ID column
             ListView_InsertColumn(hList, 2, &lvc);
+
+            sizeColumns();
 
             // Subclass the edit box for ESC key
             HWND hEdit = GetDlgItem(hDlg, IDC_EDIT_TAG);
@@ -749,8 +769,250 @@ INT_PTR CALLBACK TagsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPar
                     }
                 }
             }
+
+            // Custom-draw the header to look like a classic gray header.
+            HWND hHeader = hList ? ListView_GetHeader(hList) : NULL;
+            if (hHeader && pnmh->hwndFrom == hHeader && pnmh->code == NM_CUSTOMDRAW) {
+                LPNMCUSTOMDRAW cd = (LPNMCUSTOMDRAW)lParam;
+                if (cd->dwDrawStage == CDDS_PREPAINT) {
+                    SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_NOTIFYITEMDRAW);
+                    return (INT_PTR)TRUE;
+                }
+                if (cd->dwDrawStage == (CDDS_ITEMPREPAINT)) {
+                    int iCol = (int)cd->dwItemSpec;
+                    RECT rcItem;
+                    Header_GetItemRect(hHeader, iCol, &rcItem);
+                    HBRUSH br = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+                    FillRect(cd->hdc, &rcItem, br);
+                    DeleteObject(br);
+
+                    wchar_t headerText[128] = {0};
+                    HDITEMW hdi = {0};
+                    hdi.mask = HDI_TEXT;
+                    hdi.pszText = headerText;
+                    hdi.cchTextMax = 127;
+                    Header_GetItem(hHeader, iCol, &hdi);
+
+                    SetBkMode(cd->hdc, TRANSPARENT);
+                    SetTextColor(cd->hdc, GetSysColor(COLOR_BTNTEXT));
+                    RECT rcText = rcItem;
+                    rcText.left += 6;
+                    DrawTextW(cd->hdc, headerText, -1, &rcText, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+
+                    SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
+                    return (INT_PTR)TRUE;
+                }
+            }
         }
         break;
     }
+    return (INT_PTR)FALSE;
+}
+
+static void ResetSnippetsEditMode(HWND hDlg, int& editingIdx) {
+    editingIdx = -1;
+    SetDlgItemText(hDlg, IDC_EDIT_SNIPPET_TRIGGER, L"");
+    SetDlgItemText(hDlg, IDC_EDIT_SNIPPET_TEXT, L"");
+    SetDlgItemText(hDlg, IDC_BUTTON_ADD_EDIT_SNIPPET, L"Add");
+    HWND hNew = GetDlgItem(hDlg, IDC_BUTTON_NEW_SNIPPET);
+    if (hNew) ShowWindow(hNew, SW_HIDE);
+}
+
+static void ReloadSnippetsList(HWND hList, Database* db) {
+    if (!hList) return;
+    ListView_DeleteAllItems(hList);
+    if (!db) return;
+
+    std::vector<Database::Snippet> snippets = db->GetSnippets();
+    for (const auto& sn : snippets) {
+        LVITEM lvi = {0};
+        lvi.mask = LVIF_TEXT;
+        lvi.pszText = (LPWSTR)sn.trigger.c_str();
+        lvi.iItem = ListView_GetItemCount(hList);
+        int idx = ListView_InsertItem(hList, &lvi);
+
+        ListView_SetItemText(hList, idx, 1, (LPWSTR)sn.snippet.c_str());
+
+        wchar_t szId[16];
+        swprintf(szId, 16, L"%d", sn.id);
+        ListView_SetItemText(hList, idx, 2, szId);
+    }
+}
+
+INT_PTR CALLBACK SnippetsTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
+    SettingsData* pData = (SettingsData*)GetWindowLongPtr(hDlg, GWLP_USERDATA);
+    HWND hList = GetDlgItem(hDlg, IDC_LIST_SNIPPETS);
+    static int editingIdx = -1;
+
+    auto sizeColumns = [&]() {
+        if (!hList) return;
+        RECT rc;
+        GetClientRect(hList, &rc);
+        int listWidth = rc.right - rc.left;
+        int triggerWidth = 70;
+        int idWidth = 0;
+        int remaining = listWidth - triggerWidth - idWidth - 4;
+        if (remaining < 60) remaining = 60;
+        ListView_SetColumnWidth(hList, 0, triggerWidth);
+        ListView_SetColumnWidth(hList, 1, remaining);
+        ListView_SetColumnWidth(hList, 2, 0);
+    };
+
+    switch (message) {
+    case WM_INITDIALOG:
+        {
+            SetWindowLongPtr(hDlg, GWLP_USERDATA, lParam);
+            pData = (SettingsData*)lParam;
+            editingIdx = -1;
+
+            ListView_SetExtendedListViewStyle(hList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+
+            LVCOLUMN lvc = {0};
+            lvc.mask = LVCF_TEXT | LVCF_WIDTH;
+            lvc.pszText = (LPWSTR)L"Trigger";
+            lvc.cx = 70;
+            ListView_InsertColumn(hList, 0, &lvc);
+
+            lvc.pszText = (LPWSTR)L"Snippet";
+            lvc.cx = 130;
+            ListView_InsertColumn(hList, 1, &lvc);
+
+            lvc.pszText = (LPWSTR)L"ID";
+            lvc.cx = 0;
+            ListView_InsertColumn(hList, 2, &lvc);
+
+            sizeColumns();
+
+            HWND hNew = GetDlgItem(hDlg, IDC_BUTTON_NEW_SNIPPET);
+            if (hNew) ShowWindow(hNew, SW_HIDE);
+
+            if (pData && pData->db) {
+                CheckDlgButton(hDlg, IDC_CHECK_SNIPPETS_ENABLED_NOTES,
+                    pData->db->GetSetting("snippets_enabled_notes", "0") == "1" ? BST_CHECKED : BST_UNCHECKED);
+                CheckDlgButton(hDlg, IDC_CHECK_SNIPPETS_ENABLED_CHECKLISTS,
+                    pData->db->GetSetting("snippets_enabled_checklists", "0") == "1" ? BST_CHECKED : BST_UNCHECKED);
+
+                ReloadSnippetsList(hList, pData->db);
+            }
+        }
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        {
+            if (!pData || !pData->db) break;
+            int wmId = LOWORD(wParam);
+            int wmEvent = HIWORD(wParam);
+
+            if (wmEvent == BN_CLICKED) {
+                if (wmId == IDC_CHECK_SNIPPETS_ENABLED_NOTES) {
+                    pData->db->SetSetting("snippets_enabled_notes", IsDlgButtonChecked(hDlg, IDC_CHECK_SNIPPETS_ENABLED_NOTES) == BST_CHECKED ? "1" : "0");
+                } else if (wmId == IDC_CHECK_SNIPPETS_ENABLED_CHECKLISTS) {
+                    pData->db->SetSetting("snippets_enabled_checklists", IsDlgButtonChecked(hDlg, IDC_CHECK_SNIPPETS_ENABLED_CHECKLISTS) == BST_CHECKED ? "1" : "0");
+                }
+            }
+
+            if (wmId == IDC_BUTTON_NEW_SNIPPET) {
+                ResetSnippetsEditMode(hDlg, editingIdx);
+            } else if (wmId == IDC_BUTTON_ADD_EDIT_SNIPPET) {
+                wchar_t triggerBuf[256];
+                wchar_t snippetBuf[1024];
+                GetDlgItemText(hDlg, IDC_EDIT_SNIPPET_TRIGGER, triggerBuf, 256);
+                GetDlgItemText(hDlg, IDC_EDIT_SNIPPET_TEXT, snippetBuf, 1024);
+
+                if (wcslen(triggerBuf) == 0) break;
+
+                if (editingIdx == -1) {
+                    Database::Snippet sn;
+                    sn.trigger = triggerBuf;
+                    sn.snippet = snippetBuf;
+                    if (pData->db->CreateSnippet(sn)) {
+                        ReloadSnippetsList(hList, pData->db);
+                        ResetSnippetsEditMode(hDlg, editingIdx);
+                    }
+                } else {
+                    wchar_t szId[16];
+                    ListView_GetItemText(hList, editingIdx, 2, szId, 16);
+                    int id = _wtoi(szId);
+
+                    Database::Snippet sn;
+                    sn.id = id;
+                    sn.trigger = triggerBuf;
+                    sn.snippet = snippetBuf;
+                    if (pData->db->UpdateSnippet(sn)) {
+                        ReloadSnippetsList(hList, pData->db);
+                        ResetSnippetsEditMode(hDlg, editingIdx);
+                    }
+                }
+            } else if (wmId == IDC_BUTTON_DELETE_SNIPPET) {
+                int idx = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+                if (idx != -1) {
+                    wchar_t szId[16];
+                    ListView_GetItemText(hList, idx, 2, szId, 16);
+                    int id = _wtoi(szId);
+                    if (pData->db->DeleteSnippet(id)) {
+                        ReloadSnippetsList(hList, pData->db);
+                        ResetSnippetsEditMode(hDlg, editingIdx);
+                    }
+                }
+            }
+        }
+        break;
+
+    case WM_NOTIFY:
+        {
+            LPNMHDR pnmh = (LPNMHDR)lParam;
+            if (pnmh->idFrom == IDC_LIST_SNIPPETS && pnmh->code == LVN_ITEMCHANGED) {
+                LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
+                if ((pnmv->uChanged & LVIF_STATE) && (pnmv->uNewState & LVIS_SELECTED)) {
+                    editingIdx = pnmv->iItem;
+                    wchar_t trigger[256];
+                    wchar_t snippet[1024];
+                    ListView_GetItemText(pnmh->hwndFrom, editingIdx, 0, trigger, 256);
+                    ListView_GetItemText(pnmh->hwndFrom, editingIdx, 1, snippet, 1024);
+                    SetDlgItemText(hDlg, IDC_EDIT_SNIPPET_TRIGGER, trigger);
+                    SetDlgItemText(hDlg, IDC_EDIT_SNIPPET_TEXT, snippet);
+                    SetDlgItemText(hDlg, IDC_BUTTON_ADD_EDIT_SNIPPET, L"Edit");
+
+                    HWND hNew = GetDlgItem(hDlg, IDC_BUTTON_NEW_SNIPPET);
+                    if (hNew) ShowWindow(hNew, SW_SHOW);
+                }
+            }
+
+            // Custom-draw the header to look like a classic gray header.
+            HWND hHeader = hList ? ListView_GetHeader(hList) : NULL;
+            if (hHeader && pnmh->hwndFrom == hHeader && pnmh->code == NM_CUSTOMDRAW) {
+                LPNMCUSTOMDRAW cd = (LPNMCUSTOMDRAW)lParam;
+                if (cd->dwDrawStage == CDDS_PREPAINT) {
+                    SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_NOTIFYITEMDRAW);
+                    return (INT_PTR)TRUE;
+                }
+                if (cd->dwDrawStage == (CDDS_ITEMPREPAINT)) {
+                    int iCol = (int)cd->dwItemSpec;
+                    RECT rcItem;
+                    Header_GetItemRect(hHeader, iCol, &rcItem);
+                    HBRUSH br = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+                    FillRect(cd->hdc, &rcItem, br);
+                    DeleteObject(br);
+
+                    wchar_t text[128] = {0};
+                    HDITEMW hdi = {0};
+                    hdi.mask = HDI_TEXT;
+                    hdi.pszText = text;
+                    hdi.cchTextMax = 127;
+                    Header_GetItem(hHeader, iCol, &hdi);
+
+                    SetBkMode(cd->hdc, TRANSPARENT);
+                    SetTextColor(cd->hdc, GetSysColor(COLOR_BTNTEXT));
+                    RECT rcText = rcItem;
+                    rcText.left += 6;
+                    DrawTextW(cd->hdc, text, -1, &rcText, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+                    SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
+                    return (INT_PTR)TRUE;
+                }
+            }
+        }
+        break;
+    }
+
     return (INT_PTR)FALSE;
 }

@@ -357,6 +357,63 @@ static LRESULT CALLBACK PreviewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam,
     return DefSubclassProc(hwnd, uMsg, wParam, lParam);
 }
 
+static bool GetTokenBeforeCaretFromRichEdit(HWND hwnd, std::wstring& token, LONG& tokenStart) {
+    token.clear();
+    tokenStart = -1;
+
+    CHARRANGE cr;
+    SendMessage(hwnd, EM_EXGETSEL, 0, (LPARAM)&cr);
+    LONG caret = cr.cpMin;
+    if (caret <= 0) return false;
+
+    const LONG kLookback = 256;
+    LONG rangeStart = caret > kLookback ? (caret - kLookback) : 0;
+
+    TEXTRANGEW tr;
+    tr.chrg.cpMin = rangeStart;
+    tr.chrg.cpMax = caret;
+
+    std::wstring buf;
+    buf.resize((size_t)(caret - rangeStart + 1));
+    tr.lpstrText = buf.empty() ? nullptr : &buf[0];
+
+    if (buf.size() <= 1) return false;
+    LRESULT copied = SendMessage(hwnd, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
+    if (copied <= 0) return false;
+    buf.resize((size_t)copied);
+
+    size_t start = buf.size();
+    while (start > 0 && !iswspace(buf[start - 1])) {
+        --start;
+    }
+
+    token = buf.substr(start);
+    tokenStart = rangeStart + (LONG)start;
+    return !token.empty();
+}
+
+static void ApplySnippetReplacementInRichEdit(HWND hwnd, LONG tokenStart, LONG tokenLen, const std::wstring& snippetRaw) {
+    std::wstring snippet = snippetRaw;
+    size_t placeholderPos = snippet.find(L"%%");
+    if (placeholderPos != std::wstring::npos) {
+        snippet.erase(placeholderPos, 2);
+    }
+
+    CHARRANGE sel = { tokenStart, tokenStart + tokenLen };
+    SendMessage(hwnd, EM_EXSETSEL, 0, (LPARAM)&sel);
+    SendMessage(hwnd, EM_REPLACESEL, TRUE, (LPARAM)snippet.c_str());
+
+    LONG caret = tokenStart;
+    if (placeholderPos != std::wstring::npos) {
+        caret = tokenStart + (LONG)placeholderPos;
+    } else {
+        // Keep the typed trailing space and place caret after it.
+        caret = tokenStart + (LONG)snippet.size() + 1;
+    }
+    CHARRANGE cr = { caret, caret };
+    SendMessage(hwnd, EM_EXSETSEL, 0, (LPARAM)&cr);
+}
+
 LRESULT CALLBACK ChecklistEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
         HWND hParent = GetParent(hwnd);
@@ -366,6 +423,57 @@ LRESULT CALLBACK ChecklistEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (uMsg == WM_CHAR && wParam == VK_RETURN) {
         return 0; // Prevent beep
     }
+
+    if (uMsg == WM_CHAR && wParam == L' ') {
+        MainWindow* pWindow = (MainWindow*)GetWindowLongPtr(GetParent(hwnd), GWLP_USERDATA);
+        Database* db = pWindow ? pWindow->GetDatabase() : nullptr;
+        if (db && db->GetSetting("snippets_enabled_checklists", "0") == "1") {
+            DWORD selStart = 0, selEnd = 0;
+            SendMessage(hwnd, EM_GETSEL, (WPARAM)&selStart, (LPARAM)&selEnd);
+            const DWORD caret = selEnd;
+
+            int len = GetWindowTextLengthW(hwnd);
+            if (len > 0 && caret <= (DWORD)len) {
+                std::wstring text;
+                text.resize((size_t)len + 1);
+                GetWindowTextW(hwnd, &text[0], len + 1);
+                text.resize(wcslen(text.c_str()));
+
+                size_t start = (size_t)caret;
+                while (start > 0 && !iswspace(text[start - 1])) {
+                    --start;
+                }
+                std::wstring token = text.substr(start, (size_t)caret - start);
+
+                LRESULT res = CallWindowProc(g_oldEditProc, hwnd, uMsg, wParam, lParam);
+
+                if (!token.empty()) {
+                    std::wstring snippetRaw;
+                    if (db->TryGetSnippetByTrigger(token, snippetRaw)) {
+                        std::wstring snippet = snippetRaw;
+                        size_t placeholderPos = snippet.find(L"%%");
+                        if (placeholderPos != std::wstring::npos) {
+                            snippet.erase(placeholderPos, 2);
+                        }
+
+                        SendMessage(hwnd, EM_SETSEL, (WPARAM)start, (LPARAM)(start + token.size()));
+                        SendMessage(hwnd, EM_REPLACESEL, TRUE, (LPARAM)snippet.c_str());
+
+                        DWORD newCaret;
+                        if (placeholderPos != std::wstring::npos) {
+                            newCaret = (DWORD)(start + placeholderPos);
+                        } else {
+                            newCaret = (DWORD)(start + snippet.size() + 1);
+                        }
+                        SendMessage(hwnd, EM_SETSEL, newCaret, newCaret);
+                    }
+                }
+
+                return 0;
+            }
+        }
+    }
+
     return CallWindowProc(g_oldEditProc, hwnd, uMsg, wParam, lParam);
 }
 
@@ -3445,6 +3553,27 @@ LRESULT CALLBACK MainWindow::RichEditSubclassProc(HWND hwnd, UINT uMsg, WPARAM w
         break;
     case WM_CHAR: {
         wchar_t ch = (wchar_t)wParam;
+        if (ch == L' ' && !self->m_markdownPreviewMode && !self->m_checklistMode && self->m_db && self->m_db->GetSetting("snippets_enabled_notes", "0") == "1") {
+            std::wstring token;
+            LONG tokenStart = -1;
+            if (GetTokenBeforeCaretFromRichEdit(hwnd, token, tokenStart)) {
+                // Mirror normal whitespace handling (word-undo tracking) before expansion.
+                self->FinalizeCurrentWord();
+
+                // Insert the typed space first.
+                DefSubclassProc(hwnd, uMsg, wParam, lParam);
+
+                std::wstring snippetRaw;
+                if (self->m_db->TryGetSnippetByTrigger(token, snippetRaw)) {
+                    ApplySnippetReplacementInRichEdit(hwnd, tokenStart, (LONG)token.size(), snippetRaw);
+                }
+
+                self->m_currentWord.clear();
+                self->m_currentWordStart = -1;
+                self->m_wordRedoStack.clear();
+                return 0;
+            }
+        }
         if (ch == 0x08) {
             if (!self->m_currentWord.empty()) {
                 self->m_currentWord.pop_back();

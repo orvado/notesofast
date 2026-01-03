@@ -18,6 +18,17 @@ A lightweight, native Windows note-taking application built with Win32 API, SQLi
 - **Selection Awareness**: Pauses spell checking when text is selected to avoid interference
 - **Multiple Dictionaries**: Support for various English locales (US, UK, AU, CA, ZA)
 
+### Snippets
+- **Text Expansion Shortcuts**: Define trigger → snippet pairs and expand them automatically when you type the trigger followed by a space.
+- **Works in Notes + Checklists**: Enable expansion separately for standard notes and checklist input.
+- **Cursor Placeholder**: Use `%%` inside a snippet to indicate where the caret should be placed after expansion.
+
+Example:
+- Trigger `;me` → Snippet `John William Hancock`
+- Trigger `;uri` → Snippet `https://www.%%.com`
+
+Configure snippets in **Settings → Snippets**. Triggers are case-sensitive.
+
 ## Building
 
 ### Prerequisites

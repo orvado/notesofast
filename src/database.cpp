@@ -321,6 +321,11 @@ bool Database::CreateSchema() {
         "    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,"
         "    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE"
         ");"
+        "CREATE TABLE IF NOT EXISTS snippets ("
+        "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "    trigger TEXT NOT NULL,"
+        "    snippet TEXT NOT NULL"
+        ");"
         "CREATE TABLE IF NOT EXISTS settings ("
         "    key TEXT PRIMARY KEY,"
         "    value TEXT"
@@ -334,6 +339,88 @@ bool Database::CreateSchema() {
         return false;
     }
     return true;
+}
+
+std::vector<Database::Snippet> Database::GetSnippets() {
+    std::vector<Snippet> snippets;
+    const char* sql = "SELECT id, trigger, snippet FROM snippets ORDER BY trigger ASC";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            Snippet sn;
+            sn.id = sqlite3_column_int(stmt, 0);
+            sn.trigger = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 1));
+            sn.snippet = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 2));
+            snippets.push_back(std::move(sn));
+        }
+        sqlite3_finalize(stmt);
+    }
+    return snippets;
+}
+
+bool Database::CreateSnippet(Snippet& snippet) {
+    const char* sql = "INSERT INTO snippets (trigger, snippet) VALUES (?, ?)";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text16(stmt, 1, snippet.trigger.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text16(stmt, 2, snippet.snippet.c_str(), -1, SQLITE_STATIC);
+        int result = sqlite3_step(stmt);
+        bool success = (result == SQLITE_DONE);
+        if (success) {
+            snippet.id = (int)sqlite3_last_insert_rowid(m_db);
+        }
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
+bool Database::UpdateSnippet(const Snippet& snippet) {
+    const char* sql = "UPDATE snippets SET trigger = ?, snippet = ? WHERE id = ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text16(stmt, 1, snippet.trigger.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text16(stmt, 2, snippet.snippet.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 3, snippet.id);
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
+bool Database::DeleteSnippet(int id) {
+    const char* sql = "DELETE FROM snippets WHERE id = ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, id);
+        bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+        return success;
+    }
+    return false;
+}
+
+bool Database::TryGetSnippetByTrigger(const std::wstring& trigger, std::wstring& outSnippet) {
+    const char* sql = "SELECT snippet FROM snippets WHERE trigger = ? LIMIT 1";
+    sqlite3_stmt* stmt;
+    outSnippet.clear();
+
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text16(stmt, 1, trigger.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const wchar_t* txt = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 0));
+            if (txt) outSnippet = txt;
+            sqlite3_finalize(stmt);
+            return true;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return false;
 }
 
 bool Database::InitializeColors() {

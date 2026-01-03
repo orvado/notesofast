@@ -19,6 +19,12 @@ public:
         int order;
     };
 
+    struct Snippet {
+        int id;
+        std::wstring trigger;
+        std::wstring snippet;
+    };
+
     enum class SortBy {
         DateModified,
         DateCreated,
@@ -65,6 +71,13 @@ public:
     std::vector<Tag> GetNoteTags(int noteId);
     bool AddTagToNote(int noteId, int tagId);
     bool RemoveTagFromNote(int noteId, int tagId);
+
+    // Snippet methods
+    std::vector<Snippet> GetSnippets();
+    bool CreateSnippet(Snippet& snippet);
+    bool UpdateSnippet(const Snippet& snippet);
+    bool DeleteSnippet(int id);
+    bool TryGetSnippetByTrigger(const std::wstring& trigger, std::wstring& outSnippet);
 
     // Settings methods
     std::string GetSetting(const std::string& key, const std::string& defaultValue = "");
