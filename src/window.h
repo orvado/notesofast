@@ -23,6 +23,8 @@ public:
 
     Database* GetDatabase() const { return m_db; }
 
+    void CancelChecklistItemEdit();
+
 protected:
     virtual LRESULT HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -54,6 +56,7 @@ protected:
     void SetSortOrder(Database::SortBy sort);
     void ToggleChecklistMode();
     void UpdateChecklistUI();
+    void BeginChecklistItemEdit(int index);
     void UpdateNoteTagCombo();
     void AddChecklistItem();
     void RemoveChecklistItem();
@@ -109,6 +112,8 @@ protected:
     bool m_showArchived = false;
     Database::SortBy m_sortBy = Database::SortBy::DateModified;
     bool m_checklistMode = false;
+    int m_editingChecklistItemId = -1;
+    bool m_suppressChecklistSelectionEdit = false;
     int m_selectedTagId = -1; // -1 for <None>
     int m_newNoteTagId = -1; // Tag to apply when saving a new note
     int m_currentNoteTagId = -2; // Pending tag change: -2=no change, -1=<None>, >=0=tag ID

@@ -415,12 +415,22 @@ static void ApplySnippetReplacementInRichEdit(HWND hwnd, LONG tokenStart, LONG t
 }
 
 LRESULT CALLBACK ChecklistEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_KEYDOWN && wParam == VK_ESCAPE) {
+        MainWindow* pWindow = (MainWindow*)GetWindowLongPtr(GetParent(hwnd), GWLP_USERDATA);
+        if (pWindow) {
+            pWindow->CancelChecklistItemEdit();
+        }
+        return 0;
+    }
     if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
         HWND hParent = GetParent(hwnd);
         SendMessage(hParent, WM_COMMAND, MAKEWPARAM(ID_ADD_ITEM, BN_CLICKED), (LPARAM)hwnd);
         return 0;
     }
     if (uMsg == WM_CHAR && wParam == VK_RETURN) {
+        return 0; // Prevent beep
+    }
+    if (uMsg == WM_CHAR && wParam == VK_ESCAPE) {
         return 0; // Prevent beep
     }
 
@@ -1761,6 +1771,23 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
     }
 
     if (pnmh->idFrom == ID_CHECKLIST_LIST) {
+        if (pnmh->code == LVN_KEYDOWN) {
+            LPNMLVKEYDOWN kd = (LPNMLVKEYDOWN)lParam;
+            if (kd->wVKey == VK_ESCAPE) {
+                CancelChecklistItemEdit();
+                return 0;
+            }
+        }
+        if (pnmh->code == LVN_ITEMCHANGED) {
+            LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
+            if (m_suppressChecklistSelectionEdit) {
+                return 0;
+            }
+            if ((pnmv->uChanged & LVIF_STATE) && (pnmv->uNewState & LVIS_SELECTED)) {
+                BeginChecklistItemEdit(pnmv->iItem);
+            }
+            return 0;
+        }
         if (pnmh->code == NM_DBLCLK) {
             int selected = ListView_GetNextItem(m_hwndChecklistList, -1, LVNI_SELECTED);
             if (selected >= 0) {
@@ -2091,6 +2118,7 @@ void MainWindow::LoadNotesList(const std::wstring& filter, bool titleOnly, bool 
 
 void MainWindow::LoadNoteContent(int listIndex) {
     if (listIndex >= 0 && listIndex < (int)m_filteredIndices.size()) {
+        CancelChecklistItemEdit();
         int previousNoteId = m_currentNoteId;
         int realIndex = m_filteredIndices[listIndex];
         m_isNewNote = false;
@@ -2154,6 +2182,7 @@ void MainWindow::LoadNoteContent(int listIndex) {
         UpdateWindowTitle();
         ScheduleSpellCheck();
     } else {
+        CancelChecklistItemEdit();
         m_currentNoteIndex = -1;
         m_currentNoteId = -1;
         PersistLastViewedNote();
@@ -2894,11 +2923,36 @@ void MainWindow::ToggleChecklistMode() {
     if (m_currentNoteIndex >= 0 && m_currentNoteIndex < (int)m_notes.size()) {
         m_checklistMode = !m_checklistMode;
         SendMessage(m_hwndToolbar, TB_CHECKBUTTON, IDM_TOGGLE_CHECKLIST, m_checklistMode ? TRUE : FALSE);
+
+        if (m_checklistMode) {
+            CancelChecklistItemEdit();
+        }
         
         if (m_db->ToggleNoteType(m_notes[m_currentNoteIndex].id, m_checklistMode)) {
             m_notes[m_currentNoteIndex].is_checklist = m_checklistMode;
             UpdateChecklistUI();
         }
+    }
+}
+
+void MainWindow::CancelChecklistItemEdit() {
+    m_editingChecklistItemId = -1;
+    if (m_hwndAddItem) SetWindowTextW(m_hwndAddItem, L"Add Item");
+    if (m_hwndChecklistEdit) SetWindowTextW(m_hwndChecklistEdit, L"");
+}
+
+void MainWindow::BeginChecklistItemEdit(int index) {
+    if (!m_checklistMode || m_currentNoteIndex < 0) return;
+    auto& items = m_notes[m_currentNoteIndex].checklist_items;
+    if (index < 0 || index >= (int)items.size()) return;
+
+    m_editingChecklistItemId = items[index].id;
+    if (m_hwndAddItem) SetWindowTextW(m_hwndAddItem, L"Edit Item");
+    if (m_hwndChecklistEdit) {
+        std::wstring text = Utils::Utf8ToWide(items[index].item_text);
+        SetWindowTextW(m_hwndChecklistEdit, text.c_str());
+        SetFocus(m_hwndChecklistEdit);
+        SendMessage(m_hwndChecklistEdit, EM_SETSEL, (WPARAM)text.size(), (LPARAM)text.size());
     }
 }
 
@@ -3017,6 +3071,31 @@ void MainWindow::AddChecklistItem() {
         std::string itemText = Utils::WideToUtf8(buffer);
         
         if (!itemText.empty()) {
+            if (m_editingChecklistItemId != -1) {
+                auto& items = m_notes[m_currentNoteIndex].checklist_items;
+                int idx = -1;
+                for (int i = 0; i < (int)items.size(); ++i) {
+                    if (items[i].id == m_editingChecklistItemId) {
+                        idx = i;
+                        break;
+                    }
+                }
+
+                if (idx != -1) {
+                    items[idx].item_text = itemText;
+                    if (m_db->UpdateChecklistItem(items[idx])) {
+                        CancelChecklistItemEdit();
+                        UpdateChecklistUI();
+                        // Stay in Add mode after saving an edit.
+                        m_suppressChecklistSelectionEdit = true;
+                        ListView_SetItemState(m_hwndChecklistList, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+                        m_suppressChecklistSelectionEdit = false;
+                        SetFocus(m_hwndChecklistEdit);
+                    }
+                }
+                return;
+            }
+
             ChecklistItem newItem;
             newItem.note_id = m_notes[m_currentNoteIndex].id;
             newItem.item_text = itemText;
@@ -3043,6 +3122,9 @@ void MainWindow::RemoveChecklistItem() {
             ListView_GetItem(m_hwndChecklistList, &lvi);
             
             int itemId = (int)lvi.lParam;
+            if (itemId == m_editingChecklistItemId) {
+                CancelChecklistItemEdit();
+            }
             if (m_db->DeleteChecklistItem(itemId)) {
                 auto& items = m_notes[m_currentNoteIndex].checklist_items;
                 items.erase(std::remove_if(items.begin(), items.end(),
@@ -3073,7 +3155,9 @@ void MainWindow::MoveChecklistItemUp() {
             m_db->UpdateChecklistItem(items[selected - 1]);
             
             UpdateChecklistUI();
+            m_suppressChecklistSelectionEdit = true;
             ListView_SetItemState(m_hwndChecklistList, selected - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            m_suppressChecklistSelectionEdit = false;
         }
     }
 }
@@ -3091,7 +3175,9 @@ void MainWindow::MoveChecklistItemDown() {
             m_db->UpdateChecklistItem(items[selected + 1]);
             
             UpdateChecklistUI();
+            m_suppressChecklistSelectionEdit = true;
             ListView_SetItemState(m_hwndChecklistList, selected + 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            m_suppressChecklistSelectionEdit = false;
         }
     }
 }
@@ -3103,7 +3189,9 @@ void MainWindow::ToggleChecklistItemCheck(int index) {
         
         if (m_db->ToggleChecklistItem(item.id, item.is_checked)) {
             UpdateChecklistUI();
+            m_suppressChecklistSelectionEdit = true;
             ListView_SetItemState(m_hwndChecklistList, index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            m_suppressChecklistSelectionEdit = false;
         }
     }
 }
