@@ -1151,8 +1151,6 @@ void MainWindow::OnCreate() {
     int imgQuote = addResIcon(IDI_MD_BLOCKQUOTE);
     int imgOL = addResIcon(IDI_MD_NUMBERLIST);
     int imgUL = addResIcon(IDI_MD_BULLETLIST);
-    int imgSub = addResIcon(IDI_MD_SUBSCRIPT);
-    int imgSuper = addResIcon(IDI_MD_SUPERSCRIPT);
     int imgTable = addResIcon(IDI_MD_TABLE);
     int imgLink = addResIcon(IDI_MD_LINK);
     int imgView = addResIcon(IDI_MD_VIEW);
@@ -1183,9 +1181,7 @@ void MainWindow::OnCreate() {
     mtbb[i].iBitmap = imgOL; mtbb[i].idCommand = IDM_MARKDOWN_OL; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
     mtbb[i].iBitmap = imgUL; mtbb[i].idCommand = IDM_MARKDOWN_UL; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
 
-    // New (currently no-op) buttons: Subscript / Superscript / Table
-    mtbb[i].iBitmap = imgSub; mtbb[i].idCommand = IDM_MARKDOWN_SUBSCRIPT; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
-    mtbb[i].iBitmap = imgSuper; mtbb[i].idCommand = IDM_MARKDOWN_SUPERSCRIPT; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
+    // Table
     mtbb[i].iBitmap = imgTable; mtbb[i].idCommand = IDM_MARKDOWN_TABLE; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
