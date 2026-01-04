@@ -37,6 +37,74 @@ static std::wstring TrimRightSpaces(const std::wstring& s) {
     return s.substr(0, end);
 }
 
+static std::wstring TrimSpaces(const std::wstring& s) {
+    size_t start = 0;
+    while (start < s.size() && (s[start] == L' ' || s[start] == L'\t')) {
+        ++start;
+    }
+    size_t end = s.size();
+    while (end > start && (s[end - 1] == L' ' || s[end - 1] == L'\t')) {
+        --end;
+    }
+    return s.substr(start, end - start);
+}
+
+static bool LooksLikeMarkdownTableRow(const std::wstring& trimmed) {
+    // Minimal heuristic: must contain at least 2 pipes and some non-pipe content.
+    int pipes = 0;
+    bool hasOther = false;
+    for (wchar_t c : trimmed) {
+        if (c == L'|') pipes++;
+        else if (c != L' ' && c != L'\t') hasOther = true;
+    }
+    return (pipes >= 2 && hasOther);
+}
+
+static bool LooksLikeMarkdownTableSeparator(const std::wstring& trimmed) {
+    // Separator line like: | --- | ---: | :--- |
+    bool sawDash = false;
+    bool sawPipe = false;
+    for (wchar_t c : trimmed) {
+        if (c == L'|') {
+            sawPipe = true;
+            continue;
+        }
+        if (c == L'-') {
+            sawDash = true;
+            continue;
+        }
+        if (c == L':' || c == L' ' || c == L'\t') {
+            continue;
+        }
+        return false;
+    }
+    return sawPipe && sawDash;
+}
+
+static std::vector<std::wstring> SplitMarkdownTableRow(const std::wstring& line) {
+    std::wstring t = TrimSpaces(line);
+    if (!t.empty() && t.front() == L'|') t.erase(t.begin());
+    if (!t.empty() && t.back() == L'|') t.pop_back();
+
+    std::vector<std::wstring> cells;
+    size_t start = 0;
+    while (start <= t.size()) {
+        size_t end = t.find(L'|', start);
+        std::wstring cell = (end == std::wstring::npos) ? t.substr(start) : t.substr(start, end - start);
+        cells.push_back(TrimSpaces(cell));
+        if (end == std::wstring::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+
+    // Drop trailing empty cell caused by a final '|' after trimming.
+    while (!cells.empty() && cells.back().empty()) {
+        cells.pop_back();
+    }
+    return cells;
+}
+
 static bool HasMarkdownHardBreak(const std::wstring& line) {
     // In Markdown, two trailing spaces indicate a hard line break.
     // Count actual spaces (not tabs).
@@ -564,6 +632,7 @@ MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdi
 
 MainWindow::~MainWindow() {
     if (m_hFont) DeleteObject(m_hFont);
+    if (m_hEditorFont) DeleteObject(m_hEditorFont);
     if (m_hMarkdownToolbarImages) {
         ImageList_Destroy(m_hMarkdownToolbarImages);
         m_hMarkdownToolbarImages = NULL;
@@ -798,10 +867,9 @@ void MainWindow::OnCreate() {
         0, 0, 0, 0, m_hwnd, (HMENU)ID_RICHEDIT, GetModuleHandle(NULL), NULL);
 
     SetWindowSubclass(m_hwndEdit, RichEditSubclassProc, 1, (DWORD_PTR)this);
-    
-    // Set font for Rich Edit
+
+    // Preview font stays fixed (appearance setting should not affect preview).
     m_hFont = CreateFont(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-    SendMessage(m_hwndEdit, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
     // Enable Auto-URL detection
     bool clickableLinks = (m_db && m_db->GetSetting("clickable_links", "1") == "1");
@@ -1194,7 +1262,86 @@ void MainWindow::OnCreate() {
     m_spellChecker = std::make_unique<SpellChecker>();
     m_spellChecker->Initialize(affPath, dicPath);
 
+    // Apply user-selected font for editor + checklist.
+    ApplyEditorFontFromSettings();
+
     LoadNotesList(L"", false, true, m_lastViewedNoteId);
+}
+
+void MainWindow::ApplyEditorFontFromSettings() {
+    if (!m_db) {
+        return;
+    }
+
+    std::string faceUtf8 = m_db->GetSetting("font_face", "Segoe UI");
+    std::string sizeUtf8 = m_db->GetSetting("font_size", "10");
+
+    int pt = 10;
+    try {
+        pt = std::stoi(sizeUtf8);
+    } catch (...) {
+        pt = 10;
+    }
+    if (pt < 6) pt = 6;
+    if (pt > 72) pt = 72;
+
+    std::wstring face = Utils::Utf8ToWide(faceUtf8);
+    if (face.empty()) {
+        face = L"Segoe UI";
+    }
+
+    int dpiY = 96;
+    HDC hdc = GetDC(m_hwnd);
+    if (hdc) {
+        dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
+        ReleaseDC(m_hwnd, hdc);
+    }
+
+    int height = -MulDiv(pt, dpiY, 72);
+    HFONT hNew = CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, face.c_str());
+    if (!hNew) {
+        hNew = CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    }
+    if (!hNew) {
+        return;
+    }
+
+    if (m_hEditorFont) {
+        DeleteObject(m_hEditorFont);
+    }
+    m_hEditorFont = hNew;
+
+    // Apply to the main editor.
+    if (m_hwndEdit) {
+        SendMessage(m_hwndEdit, WM_SETFONT, (WPARAM)m_hEditorFont, TRUE);
+
+        // Ensure existing text is updated to the new font/size.
+        CHARRANGE sel = {};
+        SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&sel);
+
+        CHARFORMAT2 cf = {};
+        cf.cbSize = sizeof(cf);
+        cf.dwMask = CFM_FACE | CFM_SIZE;
+        cf.yHeight = pt * 20;
+        wcsncpy_s(cf.szFaceName, face.c_str(), LF_FACESIZE - 1);
+        SendMessage(m_hwndEdit, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
+
+        SendMessage(m_hwndEdit, EM_EXSETSEL, 0, (LPARAM)&sel);
+    }
+
+    // Apply to checklist display (list + entry).
+    if (m_hwndChecklistList) {
+        SendMessage(m_hwndChecklistList, WM_SETFONT, (WPARAM)m_hEditorFont, TRUE);
+        InvalidateRect(m_hwndChecklistList, NULL, TRUE);
+    }
+    if (m_hwndChecklistEdit) {
+        SendMessage(m_hwndChecklistEdit, WM_SETFONT, (WPARAM)m_hEditorFont, TRUE);
+        InvalidateRect(m_hwndChecklistEdit, NULL, TRUE);
+    }
 }
 
 void MainWindow::OnSize(int width, int height) {
@@ -1428,6 +1575,7 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
     case IDM_SETTINGS:
         CreateSettingsDialog(m_hwnd, m_db, m_dbPath);
         ConfigureCloudSyncTimer();
+        ApplyEditorFontFromSettings();
         break;
     case IDM_TAG_FILTER_BUTTON:
         {
@@ -1507,8 +1655,38 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         break;
     case IDM_MARKDOWN_SUBSCRIPT:
     case IDM_MARKDOWN_SUPERSCRIPT:
+        // No-op for now
+        break;
     case IDM_MARKDOWN_TABLE:
-        // No-op for now (buttons are present but not implemented yet)
+        {
+            // Popup dimension picker: 1x1 .. 5x5 in a 5-column menu.
+            RECT rc;
+            SendMessage(m_hwndMarkdownToolbar, TB_GETRECT, IDM_MARKDOWN_TABLE, (LPARAM)&rc);
+            MapWindowPoints(m_hwndMarkdownToolbar, NULL, (LPPOINT)&rc, 2);
+
+            HMENU hMenu = CreatePopupMenu();
+            for (int col = 1; col <= 5; ++col) {
+                for (int row = 1; row <= 5; ++row) {
+                    UINT id = IDM_MARKDOWN_TABLE_DIM_BASE + (col - 1) * 5 + (row - 1);
+                    std::wstring label = std::to_wstring(row) + L"x" + std::to_wstring(col);
+                    UINT flags = MF_STRING;
+                    if (row == 1 && col > 1) {
+                        flags |= MF_MENUBARBREAK;
+                    }
+                    AppendMenu(hMenu, flags, id, label.c_str());
+                }
+            }
+
+            UINT cmd = TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, rc.left, rc.bottom, 0, m_hwnd, NULL);
+            DestroyMenu(hMenu);
+
+            if (cmd >= IDM_MARKDOWN_TABLE_DIM_BASE && cmd < IDM_MARKDOWN_TABLE_DIM_BASE + 25) {
+                int idx = (int)(cmd - IDM_MARKDOWN_TABLE_DIM_BASE);
+                int row = (idx % 5) + 1;
+                int col = (idx / 5) + 1;
+                InsertMarkdownTable(row, col);
+            }
+        }
         break;
     case IDM_MARKDOWN_UNDO:
         SendMessage(m_hwndEdit, EM_UNDO, 0, 0);
@@ -1664,6 +1842,63 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
 
         // Keep the markdown tag button in sync with the active filter, even if no notes match
         UpdateNoteTagCombo();
+    }
+}
+
+void MainWindow::InsertMarkdownTable(int rows, int cols) {
+    if (!m_hwndEdit || rows <= 0 || cols <= 0) {
+        return;
+    }
+
+    // Build a GitHub-style Markdown table with a header row and separator row.
+    const int kDashCount = 11;
+
+    auto pad = [](const std::wstring& s, size_t width) {
+        if (s.size() >= width) return s;
+        return s + std::wstring(width - s.size(), L' ');
+    };
+
+    std::wstring table;
+
+    // Header row
+    table += L"|";
+    for (int c = 1; c <= cols; ++c) {
+        std::wstring cell = L"H" + std::to_wstring(c);
+        table += L" " + pad(cell, kDashCount) + L" |";
+    }
+    table += L"\r\n";
+
+    // Separator row
+    table += L"|";
+    for (int c = 1; c <= cols; ++c) {
+        table += L" " + std::wstring(kDashCount, L'-') + L" |";
+    }
+    table += L"\r\n";
+
+    // Body rows
+    int cellIndex = 1;
+    for (int r = 1; r <= rows; ++r) {
+        table += L"|";
+        for (int c = 1; c <= cols; ++c) {
+            std::wstring cell = L"C" + std::to_wstring(cellIndex++);
+            table += L" " + pad(cell, kDashCount) + L" |";
+        }
+        table += L"\r\n";
+    }
+
+    // Insert at selection/caret
+    CHARRANGE cr = {};
+    SendMessage(m_hwndEdit, EM_EXGETSEL, 0, (LPARAM)&cr);
+    LONG insertStart = cr.cpMin;
+
+    SendMessage(m_hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)table.c_str());
+
+    // Place caret just after H1
+    size_t h1pos = table.find(L"H1");
+    if (h1pos != std::wstring::npos) {
+        LONG caret = insertStart + (LONG)h1pos + 2; // after "H1"
+        SendMessage(m_hwndEdit, EM_SETSEL, caret, caret);
+        SetFocus(m_hwndEdit);
     }
 }
 
@@ -2333,6 +2568,8 @@ void MainWindow::RenderMarkdownPreview() {
         std::wstring t = TrimLeft(rawLine);
         if (t.empty()) return false;
         if (IsHorizontalRule(t)) return false;
+        // tables
+        if (LooksLikeMarkdownTableRow(t) || LooksLikeMarkdownTableSeparator(t)) return false;
         // header
         if (!t.empty() && t[0] == L'#') {
             size_t k = 0;
@@ -2378,6 +2615,133 @@ void MainWindow::RenderMarkdownPreview() {
             // Reset paragraph formatting per block
             SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
             ApplyParaNormal(m_hwndPreview);
+
+            // Markdown table block
+            if (LooksLikeMarkdownTableRow(trimmed) && (lineIndex + 1 < lines.size()) && LooksLikeMarkdownTableSeparator(TrimLeft(lines[lineIndex + 1]))) {
+                std::vector<std::wstring> headerCells = SplitMarkdownTableRow(trimmed);
+
+                // Gather body rows
+                std::vector<std::vector<std::wstring>> bodyRows;
+                size_t j = lineIndex + 2; // skip separator
+                while (j < lines.size()) {
+                    std::wstring t = TrimLeft(lines[j]);
+                    if (t.empty()) break;
+                    if (!LooksLikeMarkdownTableRow(t)) break;
+                    if (LooksLikeMarkdownTableSeparator(t)) {
+                        j++;
+                        continue;
+                    }
+                    bodyRows.push_back(SplitMarkdownTableRow(t));
+                    j++;
+                }
+
+                int colCount = (int)headerCells.size();
+                for (const auto& r : bodyRows) {
+                    colCount = std::max(colCount, (int)r.size());
+                }
+                if (colCount <= 0) {
+                    // Fallback: just emit the raw lines
+                    emitInline(trimmed);
+                    emitNewlines(1);
+                    continue;
+                }
+
+                headerCells.resize(colCount);
+                for (auto& r : bodyRows) {
+                    r.resize(colCount);
+                }
+
+                // Measure max widths (pixels) per column using the preview font.
+                std::vector<int> colPx(colCount, 0);
+                HDC hdc = GetDC(m_hwndPreview);
+                HFONT oldFont = NULL;
+                if (hdc && m_hFont) {
+                    oldFont = (HFONT)SelectObject(hdc, m_hFont);
+                }
+
+                auto measure = [&](const std::wstring& s) -> int {
+                    if (!hdc) return (int)s.size() * 8;
+                    SIZE sz = {};
+                    GetTextExtentPoint32W(hdc, s.c_str(), (int)s.size(), &sz);
+                    return sz.cx;
+                };
+
+                for (int c = 0; c < colCount; ++c) {
+                    colPx[c] = std::max(colPx[c], measure(headerCells[c]));
+                    for (const auto& r : bodyRows) {
+                        colPx[c] = std::max(colPx[c], measure(r[c]));
+                    }
+                    colPx[c] += 24; // padding
+                }
+
+                int dpiX = 96;
+                if (hdc) {
+                    dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+                }
+
+                PARAFORMAT2 pf = {};
+                pf.cbSize = sizeof(pf);
+                pf.dwMask = PFM_TABSTOPS;
+                pf.cTabCount = (SHORT)std::min(colCount - 1, MAX_TAB_STOPS);
+
+                int accumPx = 0;
+                for (int t = 0; t < pf.cTabCount; ++t) {
+                    accumPx += colPx[t];
+                    pf.rgxTabs[t] = MulDiv(accumPx, 1440, dpiX); // pixels->twips
+                }
+
+                SendMessage(m_hwndPreview, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+
+                auto emitPlain = [&](const std::wstring& s, bool bold) {
+                    CHARFORMAT2 cf = {};
+                    cf.cbSize = sizeof(cf);
+                    cf.dwMask = CFM_BOLD | CFM_COLOR;
+                    cf.dwEffects = bold ? CFE_BOLD : 0;
+                    cf.crTextColor = RGB(0, 0, 0);
+                    SendMessage(m_hwndPreview, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+                    SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)s.c_str());
+                    markTextEmitted();
+                };
+
+                auto emitRow = [&](const std::vector<std::wstring>& cells, bool bold) {
+                    SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
+                    for (int c = 0; c < colCount; ++c) {
+                        emitPlain(cells[c], bold);
+                        if (c + 1 < colCount) {
+                            SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)L"\t");
+                            markTextEmitted();
+                        }
+                    }
+                    emitNewlines(1);
+                };
+
+                emitRow(headerCells, true);
+
+                // Separator line under header
+                {
+                    std::vector<std::wstring> sep(colCount);
+                    for (int c = 0; c < colCount; ++c) {
+                        sep[c] = std::wstring(8, L'\x2500'); // U+2500
+                    }
+                    emitRow(sep, false);
+                }
+
+                for (const auto& r : bodyRows) {
+                    emitRow(r, false);
+                }
+
+                // Restore font selection
+                if (hdc && oldFont) {
+                    SelectObject(hdc, oldFont);
+                }
+                if (hdc) {
+                    ReleaseDC(m_hwndPreview, hdc);
+                }
+
+                // Skip consumed lines
+                lineIndex = j - 1;
+                continue;
+            }
 
             if (IsHorizontalRule(trimmed)) {
                 // Use a box-drawing character so the rule looks like a solid line (no visible gaps).

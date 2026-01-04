@@ -79,6 +79,7 @@ protected:
     void ShowSettingsDialog();
     void ApplyMarkdown(const std::wstring& prefix, const std::wstring& suffix);
     void ApplyLineMarkdown(const std::wstring& prefix, bool sequential = false);
+    void InsertMarkdownTable(int rows, int cols);
     void UpdateStatusBarDbInfo();
     void UpdateStatusBarParts(int statusWidth);
     void SyncDatabaseOnExitIfEnabled();
@@ -124,6 +125,7 @@ protected:
     static const int SPLITTER_WIDTH = 5;
     
     HFONT m_hFont = NULL;
+    HFONT m_hEditorFont = NULL;
     bool m_hotkeysRegistered = false;
     bool m_searchTitleOnly = false;
     std::wstring m_currentSearchFilter = L"";
@@ -172,4 +174,6 @@ protected:
     bool PerformWordUndo();
     bool PerformWordRedo();
     void ResetWordUndoState();
+
+    void ApplyEditorFontFromSettings();
 };
