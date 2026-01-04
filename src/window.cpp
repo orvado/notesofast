@@ -11,8 +11,34 @@
 #include <memory>
 #include <cwctype>
 #include <cwchar>
+#include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <process.h>
+
+static std::string ToLowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) {
+        return (char)std::tolower(ch);
+    });
+    return s;
+}
+
+static Database::SortBy ParseNoteSortBySetting(const std::string& value, Database::SortBy fallback) {
+    std::string v = ToLowerAscii(value);
+    if (v == "datemodified" || v == "modified" || v == "mod" || v == "0") return Database::SortBy::DateModified;
+    if (v == "datecreated" || v == "created" || v == "create" || v == "1") return Database::SortBy::DateCreated;
+    if (v == "title" || v == "name" || v == "2") return Database::SortBy::Title;
+    return fallback;
+}
+
+static std::string NoteSortByToSetting(Database::SortBy sortBy) {
+    switch (sortBy) {
+        case Database::SortBy::DateCreated: return "DateCreated";
+        case Database::SortBy::Title: return "Title";
+        case Database::SortBy::DateModified:
+        default: return "DateModified";
+    }
+}
 
 static LONG GetRichEditTextLength(HWND hwnd) {
     GETTEXTLENGTHEX ltx = {};
@@ -103,6 +129,75 @@ static std::vector<std::wstring> SplitMarkdownTableRow(const std::wstring& line)
         cells.pop_back();
     }
     return cells;
+}
+
+struct RtfStreamCookie {
+    const char* data = nullptr;
+    size_t len = 0;
+    size_t pos = 0;
+};
+
+static DWORD CALLBACK RichEditStreamInCallback(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LONG* pcb) {
+    RtfStreamCookie* c = (RtfStreamCookie*)dwCookie;
+    if (!c || !c->data || c->pos >= c->len) {
+        *pcb = 0;
+        return 0;
+    }
+
+    size_t remaining = c->len - c->pos;
+    size_t toCopy = (remaining < (size_t)cb) ? remaining : (size_t)cb;
+    memcpy(pbBuff, c->data + c->pos, toCopy);
+    c->pos += toCopy;
+    *pcb = (LONG)toCopy;
+    return 0;
+}
+
+static std::string RtfEscape(const std::wstring& s) {
+    // Produce ASCII RTF with \uN? escapes for non-ASCII.
+    std::string out;
+    out.reserve(s.size() * 2);
+
+    for (wchar_t wc : s) {
+        if (wc == L'\\' || wc == L'{' || wc == L'}') {
+            out.push_back('\\');
+            out.push_back((char)wc);
+            continue;
+        }
+        if (wc == L'\r') continue;
+        if (wc == L'\n') {
+            out += "\\line ";
+            continue;
+        }
+        if (wc >= 0x20 && wc <= 0x7E) {
+            out.push_back((char)wc);
+            continue;
+        }
+
+        // RTF expects signed 16-bit values for \u.
+        short u = (short)wc;
+        out += "\\u";
+        out += std::to_string((int)u);
+        out += "?";
+    }
+
+    return out;
+}
+
+static void StreamInRtfSelection(HWND hwndRichEdit, const std::string& rtf) {
+    if (!hwndRichEdit || rtf.empty()) {
+        return;
+    }
+
+    RtfStreamCookie cookie;
+    cookie.data = rtf.data();
+    cookie.len = rtf.size();
+    cookie.pos = 0;
+
+    EDITSTREAM es = {};
+    es.dwCookie = (DWORD_PTR)&cookie;
+    es.pfnCallback = RichEditStreamInCallback;
+
+    SendMessage(hwndRichEdit, EM_STREAMIN, (WPARAM)(SF_RTF | SFF_SELECTION), (LPARAM)&es);
 }
 
 static bool HasMarkdownHardBreak(const std::wstring& line) {
@@ -628,6 +723,10 @@ MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdi
     } catch (...) {
         m_lastViewedNoteId = -1;
     }
+
+    // Restore note list sort order.
+    std::string sortStr = m_db->GetSetting("NoteSortBy", "DateModified");
+    m_sortBy = ParseNoteSortBySetting(sortStr, Database::SortBy::DateModified);
 }
 
 MainWindow::~MainWindow() {
@@ -2460,13 +2559,16 @@ void MainWindow::ToggleMarkdownPreview() {
 
     m_markdownPreviewMode = !m_markdownPreviewMode;
 
-    if (m_markdownPreviewMode) {
-        RenderMarkdownPreview();
-    }
-
+    // Layout first so the preview has the correct formatting rectangle.
+    // If we render while the preview is still hidden/unsized, EM_GETRECT can
+    // return a stale/small width, causing tables to wrap on first render.
     RECT rcClient;
     GetClientRect(m_hwnd, &rcClient);
     OnSize(rcClient.right - rcClient.left, rcClient.bottom - rcClient.top);
+
+    if (m_markdownPreviewMode) {
+        RenderMarkdownPreview();
+    }
 }
 
 void MainWindow::RenderMarkdownPreview() {
@@ -2651,8 +2753,11 @@ void MainWindow::RenderMarkdownPreview() {
                 std::vector<int> colPx(colCount, 0);
                 HDC hdc = GetDC(m_hwndPreview);
                 HFONT oldFont = NULL;
-                if (hdc && m_hFont) {
-                    oldFont = (HFONT)SelectObject(hdc, m_hFont);
+                if (hdc) {
+                    HFONT hUse = (HFONT)SendMessage(m_hwndPreview, WM_GETFONT, 0, 0);
+                    if (hUse) {
+                        oldFont = (HFONT)SelectObject(hdc, hUse);
+                    }
                 }
 
                 auto measure = [&](const std::wstring& s) -> int {
@@ -2675,64 +2780,87 @@ void MainWindow::RenderMarkdownPreview() {
                     dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
                 }
 
-                PARAFORMAT2 pf = {};
-                pf.cbSize = sizeof(pf);
-                pf.dwMask = PFM_TABSTOPS;
-                pf.cTabCount = (SHORT)std::min(colCount - 1, MAX_TAB_STOPS);
+                RECT rcFmt = {};
+                SendMessage(m_hwndPreview, EM_GETRECT, 0, (LPARAM)&rcFmt);
+                int availPx = std::max(1, (int)(rcFmt.right - rcFmt.left));
+                int availTwips = MulDiv(availPx, 1440, dpiX);
 
-                int accumPx = 0;
-                for (int t = 0; t < pf.cTabCount; ++t) {
-                    accumPx += colPx[t];
-                    pf.rgxTabs[t] = MulDiv(accumPx, 1440, dpiX); // pixels->twips
+                // Compute column widths from content size.
+                // Prefer avoiding wrapping: do not shrink columns to fit the view.
+                std::vector<int> colTw(colCount, 0);
+                for (int c = 0; c < colCount; ++c) {
+                    int w = MulDiv(colPx[c], 1440, dpiX);
+                    if (w < 720) w = 720; // ~0.5 inch hard floor
+                    colTw[c] = w;
                 }
 
-                SendMessage(m_hwndPreview, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
-
-                auto emitPlain = [&](const std::wstring& s, bool bold) {
-                    CHARFORMAT2 cf = {};
-                    cf.cbSize = sizeof(cf);
-                    cf.dwMask = CFM_BOLD | CFM_COLOR;
-                    cf.dwEffects = bold ? CFE_BOLD : 0;
-                    cf.crTextColor = RGB(0, 0, 0);
-                    SendMessage(m_hwndPreview, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-                    SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)s.c_str());
-                    markTextEmitted();
-                };
-
-                auto emitRow = [&](const std::vector<std::wstring>& cells, bool bold) {
-                    SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
-                    for (int c = 0; c < colCount; ++c) {
-                        emitPlain(cells[c], bold);
-                        if (c + 1 < colCount) {
-                            SendMessage(m_hwndPreview, EM_REPLACESEL, FALSE, (LPARAM)L"\t");
-                            markTextEmitted();
-                        }
-                    }
-                    emitNewlines(1);
-                };
-
-                emitRow(headerCells, true);
-
-                // Separator line under header
-                {
-                    std::vector<std::wstring> sep(colCount);
-                    for (int c = 0; c < colCount; ++c) {
-                        sep[c] = std::wstring(8, L'\x2500'); // U+2500
-                    }
-                    emitRow(sep, false);
-                }
-
-                for (const auto& r : bodyRows) {
-                    emitRow(r, false);
-                }
-
-                // Restore font selection
                 if (hdc && oldFont) {
                     SelectObject(hdc, oldFont);
                 }
                 if (hdc) {
                     ReleaseDC(m_hwndPreview, hdc);
                 }
+
+                // Insert a real RichEdit table via an RTF fragment streamed into the selection.
+                // Keep char style normal around insertion.
+                {
+                    CHARFORMAT2 cf = {};
+                    cf.cbSize = sizeof(cf);
+                    cf.dwMask = CFM_BOLD | CFM_ITALIC | CFM_STRIKEOUT | CFM_UNDERLINE | CFM_LINK | CFM_COLOR;
+                    cf.dwEffects = 0;
+                    cf.crTextColor = RGB(0, 0, 0);
+                    SendMessage(m_hwndPreview, EM_SETSEL, -1, -1);
+                    SendMessage(m_hwndPreview, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+                }
+
+                auto border = "\\clbrdrt\\brdrs\\brdrw10\\brdrcf1\\clbrdrl\\brdrs\\brdrw10\\brdrcf1\\clbrdrb\\brdrs\\brdrw10\\brdrcf1\\clbrdrr\\brdrs\\brdrw10\\brdrcf1";
+
+                std::string rtf;
+                rtf.reserve(2048);
+                rtf += "{\\rtf1\\ansi\\uc1";
+                // Light gray border color.
+                rtf += "{\\colortbl ;\\red217\\green217\\blue217;}";
+
+                auto emitRowRtf = [&](const std::vector<std::wstring>& cells, bool boldHeader) {
+                    rtf += "\\trowd\\trgaph108\\trleft0";
+
+                    int x = 0;
+                    for (int c = 0; c < colCount; ++c) {
+                        x += colTw[c];
+                        rtf += border;
+                        rtf += "\\clvertalc\\clNoWrap\\cellx";
+                        rtf += std::to_string(x);
+                    }
+
+                    for (int c = 0; c < colCount; ++c) {
+                        // Start a table paragraph for each cell. Without \pard, RichEdit may
+                        // render only the first row's text.
+                        rtf += "\\pard\\intbl ";
+                        if (boldHeader) {
+                            rtf += "\\b ";
+                        }
+                        std::wstring cell = (c < (int)cells.size()) ? cells[c] : L"";
+                        rtf += RtfEscape(cell);
+                        if (boldHeader) {
+                            rtf += "\\b0 ";
+                        }
+                        rtf += "\\cell";
+                    }
+
+                    rtf += "\\row";
+                };
+
+                emitRowRtf(headerCells, true);
+                for (const auto& r : bodyRows) {
+                    emitRowRtf(r, false);
+                }
+
+                // Exit table, add a paragraph after.
+                rtf += "\\pard\\par}";
+
+                StreamInRtfSelection(m_hwndPreview, rtf);
+                markTextEmitted();
+                endBreak = 1;
 
                 // Skip consumed lines
                 lineIndex = j - 1;
@@ -3276,6 +3404,9 @@ void MainWindow::ToggleShowArchived() {
 
 void MainWindow::SetSortOrder(Database::SortBy sort) {
     m_sortBy = sort;
+    if (m_db) {
+        m_db->SetSetting("NoteSortBy", NoteSortByToSetting(sort));
+    }
     LoadNotesList();
 }
 
