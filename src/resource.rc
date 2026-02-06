@@ -16,6 +16,8 @@ IDI_MD_LINK ICON "..\\resources\\icons\\link.ico"
 IDI_MD_VIEW ICON "..\\resources\\icons\\view.ico"
 IDI_MD_UNDO ICON "..\\resources\\icons\\undo.ico"
 IDI_MD_REDO ICON "..\\resources\\icons\\redo.ico"
+IDI_MD_HEADER ICON "..\\resources\\icons\\header.ico"
+IDI_MD_LINE ICON "..\\resources\\icons\\line.ico"
 
 // Enable Common Controls v6 (visual styles + proper alpha rendering for imagelists)
 1 24 "NoteSoFast.manifest"

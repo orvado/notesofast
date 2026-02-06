@@ -83,6 +83,8 @@
 #define IDI_MD_VIEW 4020
 #define IDI_MD_UNDO 4021
 #define IDI_MD_REDO 4022
+#define IDI_MD_HEADER 4023
+#define IDI_MD_LINE 4024
 
 // Markdown Toolbar
 #define ID_MARKDOWN_TOOLBAR 5000

@@ -1406,11 +1406,11 @@ void MainWindow::OnCreate() {
     int imgView = addResIcon(IDI_MD_VIEW);
     int imgUndo = addResIcon(IDI_MD_UNDO);
     int imgRedo = addResIcon(IDI_MD_REDO);
+    int imgHeader = addResIcon(IDI_MD_HEADER);
+    int imgLine = addResIcon(IDI_MD_LINE);
 
     SendMessage(m_hwndMarkdownToolbar, TB_SETIMAGELIST, 0, (LPARAM)m_hMarkdownToolbarImages);
 
-    int iMPara = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Header\0");
-    int iMLine = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"Line\0");
     int iMTagButton = (int)SendMessage(m_hwndMarkdownToolbar, TB_ADDSTRING, 0, (LPARAM)L"<None>\0");
 
     TBBUTTON mtbb[20];
@@ -1423,7 +1423,7 @@ void MainWindow::OnCreate() {
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_PARA; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_DROPDOWN | BTNS_AUTOSIZE | BTNS_SHOWTEXT; mtbb[i].iString = iMPara; i++;
+    mtbb[i].iBitmap = imgHeader; mtbb[i].idCommand = IDM_MARKDOWN_PARA; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_DROPDOWN | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
@@ -1437,7 +1437,7 @@ void MainWindow::OnCreate() {
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
     mtbb[i].iBitmap = imgLink; mtbb[i].idCommand = IDM_MARKDOWN_LINK; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
-    mtbb[i].iBitmap = I_IMAGENONE; mtbb[i].idCommand = IDM_MARKDOWN_HR; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT; mtbb[i].iString = iMLine; i++;
+    mtbb[i].iBitmap = imgLine; mtbb[i].idCommand = IDM_MARKDOWN_HR; mtbb[i].fsState = TBSTATE_ENABLED; mtbb[i].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE; mtbb[i].iString = -1; i++;
     
     mtbb[i].fsStyle = BTNS_SEP; i++;
 
