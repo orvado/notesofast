@@ -12,6 +12,7 @@
 #include <cwctype>
 #include <cwchar>
 #include <cctype>
+#include <regex>
 #include <cstdio>
 #include <cstring>
 #include <process.h>
@@ -181,6 +182,25 @@ static std::string RtfEscape(const std::wstring& s) {
     }
 
     return out;
+}
+
+static bool IsWordChar(wchar_t c) {
+    return (iswalnum(c) != 0) || c == L'_';
+}
+
+static bool ContainsWholeWord(const std::wstring& haystack, const std::wstring& needle) {
+    if (needle.empty()) return true;
+    size_t pos = 0;
+    while ((pos = haystack.find(needle, pos)) != std::wstring::npos) {
+        bool leftOk = (pos == 0) || !IsWordChar(haystack[pos - 1]);
+        size_t end = pos + needle.size();
+        bool rightOk = (end >= haystack.size()) || !IsWordChar(haystack[end]);
+        if (leftOk && rightOk) {
+            return true;
+        }
+        pos = pos + 1;
+    }
+    return false;
 }
 
 static void StreamInRtfSelection(HWND hwndRichEdit, const std::string& rtf) {
@@ -445,6 +465,9 @@ static std::string NowLocalTimeStringA() {
 #define ID_MOVE_UP 10
 #define ID_MOVE_DOWN 11
 #define ID_PREVIEW 13
+#define ID_SEARCH_MATCHCASE 14
+#define ID_SEARCH_WHOLEWORD 15
+#define ID_SEARCH_REGEX 16
 #define ID_SPELLCHECK_TIMER 2001
 #define ID_CLOUDSYNC_TIMER 2002
 
@@ -503,6 +526,42 @@ WNDPROC g_oldEditProc = NULL;
 WNDPROC g_oldSearchProc = NULL;
 
 static const wchar_t* kSearchCueText = L"Search (\x2191\x2193 for History)";
+
+static bool GetSearchToggleState(HWND btn) {
+    if (!btn) return false;
+    LONG_PTR v = GetWindowLongPtr(btn, GWLP_USERDATA);
+    if (v == 0 || v == 1) {
+        return v == 1;
+    }
+    return (SendMessage(btn, BM_GETCHECK, 0, 0) == BST_CHECKED);
+}
+
+static void DrawSearchToggleButton(LPDRAWITEMSTRUCT dis) {
+    if (!dis) return;
+    bool checked = GetSearchToggleState(dis->hwndItem);
+    bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+
+    COLORREF bg = GetSysColor(COLOR_WINDOW);
+    COLORREF fg = RGB(0, 0, 0);
+    if (checked) {
+        bg = RGB(0, 120, 215);
+        fg = RGB(255, 255, 255);
+    } else if (pressed) {
+        bg = GetSysColor(COLOR_3DLIGHT);
+    }
+
+    HBRUSH br = CreateSolidBrush(bg);
+    FillRect(dis->hDC, &dis->rcItem, br);
+    DeleteObject(br);
+
+    FrameRect(dis->hDC, &dis->rcItem, GetSysColorBrush(checked ? COLOR_HIGHLIGHT : COLOR_3DSHADOW));
+
+    wchar_t text[8] = {0};
+    GetWindowTextW(dis->hwndItem, text, 7);
+    SetBkMode(dis->hDC, TRANSPARENT);
+    SetTextColor(dis->hDC, fg);
+    DrawTextW(dis->hDC, text, -1, &dis->rcItem, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+}
 
 static LRESULT CALLBACK PreviewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR idSubclass, DWORD_PTR refData) {
     if (uMsg == WM_LBUTTONDBLCLK) {
@@ -679,6 +738,9 @@ LRESULT CALLBACK SearchEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 RECT rc;
                 GetClientRect(hwnd, &rc);
                 rc.left += 4;
+                if (pWindow && pWindow->GetSearchButtonAreaWidth() > 0) {
+                    rc.right -= pWindow->GetSearchButtonAreaWidth();
+                }
 
                 HFONT hFont = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
                 HGDIOBJ oldFont = hFont ? SelectObject(hdc, hFont) : NULL;
@@ -695,6 +757,36 @@ LRESULT CALLBACK SearchEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return r;
     }
 
+    if (uMsg == WM_DRAWITEM) {
+        LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
+        if (dis && (dis->CtlID == ID_SEARCH_MATCHCASE || dis->CtlID == ID_SEARCH_WHOLEWORD || dis->CtlID == ID_SEARCH_REGEX)) {
+            DrawSearchToggleButton(dis);
+            return TRUE;
+        }
+    }
+
+    if (uMsg == WM_COMMAND) {
+        UINT id = LOWORD(wParam);
+        UINT code = HIWORD(wParam);
+        if ((id == ID_SEARCH_MATCHCASE || id == ID_SEARCH_WHOLEWORD || id == ID_SEARCH_REGEX) && code == BN_CLICKED) {
+            HWND btn = (HWND)lParam;
+            if (btn) {
+                bool cur = GetSearchToggleState(btn);
+                bool next = !cur;
+                SetWindowLongPtr(btn, GWLP_USERDATA, next ? 1 : 0);
+                SendMessage(btn, BM_SETCHECK, next ? BST_CHECKED : BST_UNCHECKED, 0);
+                InvalidateRect(btn, NULL, TRUE);
+            }
+            HWND parent = GetParent(hwnd);
+            if (parent) {
+                SendMessage(parent, WM_COMMAND, wParam, lParam);
+            }
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+    }
+
+
     if (uMsg == WM_SETFOCUS || uMsg == WM_KILLFOCUS || uMsg == WM_SETTEXT || uMsg == WM_KEYUP || uMsg == WM_CHAR) {
         InvalidateRect(hwnd, NULL, TRUE);
     }
@@ -703,6 +795,8 @@ LRESULT CALLBACK SearchEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 }
 
 MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdit(NULL), m_hwndSearch(NULL), 
+    m_hwndSearchMatchCase(NULL), m_hwndSearchWholeWord(NULL), m_hwndSearchRegex(NULL),
+    m_hwndSearchTooltip(NULL),
     m_hwndToolbar(NULL), m_hwndMarkdownToolbar(NULL), m_hwndStatus(NULL), 
     m_hwndChecklistList(NULL), m_hwndChecklistEdit(NULL), m_hwndAddItem(NULL), 
     m_hwndRemoveItem(NULL), m_hwndMoveUp(NULL), m_hwndMoveDown(NULL), m_db(db) {
@@ -792,6 +886,16 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_COMMAND:
         OnCommand(wParam, lParam);
         return 0;
+    case WM_DRAWITEM:
+        {
+            LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
+            if (!dis) return FALSE;
+            if (dis->CtlID == ID_SEARCH_MATCHCASE || dis->CtlID == ID_SEARCH_WHOLEWORD || dis->CtlID == ID_SEARCH_REGEX) {
+                DrawSearchToggleButton(dis);
+                return TRUE;
+            }
+        }
+        break;
     case WM_NOTIFY:
         return OnNotify(wParam, lParam);
     case WM_ACTIVATE:
@@ -869,8 +973,6 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             CreateNewNote();
             break;
         case 2: // Ctrl+S
-            // Debug: Show global Ctrl+S was triggered
-            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Global Ctrl+S hotkey triggered");
             SaveCurrentNote();
             break;
         case 3: // Ctrl+D
@@ -939,12 +1041,61 @@ void MainWindow::OnCreate() {
 
     // Create Search Box
     m_hwndSearch = CreateWindow(L"EDIT", L"", 
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | WS_CLIPCHILDREN,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_SEARCH, GetModuleHandle(NULL), NULL);
     // Cue banner is custom drawn in SearchEditProc to ensure correct glyphs + gray color.
     
     // Subclass search box to handle arrow keys
     g_oldSearchProc = (WNDPROC)SetWindowLongPtr(m_hwndSearch, GWLP_WNDPROC, (LONG_PTR)SearchEditProc);
+
+    // Search toggle buttons (match case, whole word, regex)
+    const DWORD searchToggleStyle = WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | BS_AUTOCHECKBOX | BS_PUSHLIKE;
+    m_hwndSearchMatchCase = CreateWindow(L"BUTTON", L"Aa", searchToggleStyle,
+        0, 0, 0, 0, m_hwndSearch, (HMENU)ID_SEARCH_MATCHCASE, GetModuleHandle(NULL), NULL);
+    m_hwndSearchWholeWord = CreateWindow(L"BUTTON", L"ab", searchToggleStyle,
+        0, 0, 0, 0, m_hwndSearch, (HMENU)ID_SEARCH_WHOLEWORD, GetModuleHandle(NULL), NULL);
+    m_hwndSearchRegex = CreateWindow(L"BUTTON", L".*", searchToggleStyle,
+        0, 0, 0, 0, m_hwndSearch, (HMENU)ID_SEARCH_REGEX, GetModuleHandle(NULL), NULL);
+
+    SetWindowLongPtr(m_hwndSearchMatchCase, GWLP_USERDATA, 0);
+    SetWindowLongPtr(m_hwndSearchWholeWord, GWLP_USERDATA, 0);
+    SetWindowLongPtr(m_hwndSearchRegex, GWLP_USERDATA, 0);
+    SendMessage(m_hwndSearchMatchCase, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessage(m_hwndSearchWholeWord, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessage(m_hwndSearchRegex, BM_SETCHECK, BST_UNCHECKED, 0);
+
+    HFONT hSearchFont = (HFONT)SendMessage(m_hwndSearch, WM_GETFONT, 0, 0);
+    if (hSearchFont) {
+        SendMessage(m_hwndSearchMatchCase, WM_SETFONT, (WPARAM)hSearchFont, TRUE);
+        SendMessage(m_hwndSearchWholeWord, WM_SETFONT, (WPARAM)hSearchFont, TRUE);
+        SendMessage(m_hwndSearchRegex, WM_SETFONT, (WPARAM)hSearchFont, TRUE);
+    }
+
+    // Tooltips for search toggle buttons
+    m_hwndSearchTooltip = CreateWindowEx(0, TOOLTIPS_CLASS, NULL,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        m_hwnd, NULL, GetModuleHandle(NULL), NULL);
+    if (m_hwndSearchTooltip) {
+        SendMessage(m_hwndSearchTooltip, TTM_SETMAXTIPWIDTH, 0, 200);
+
+        TOOLINFO ti = {};
+        ti.cbSize = sizeof(TOOLINFO);
+        ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+        ti.hwnd = m_hwnd;
+
+        ti.uId = (UINT_PTR)m_hwndSearchMatchCase;
+        ti.lpszText = (LPWSTR)L"Match Case";
+        SendMessage(m_hwndSearchTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+        ti.uId = (UINT_PTR)m_hwndSearchWholeWord;
+        ti.lpszText = (LPWSTR)L"Match Whole Word";
+        SendMessage(m_hwndSearchTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+        ti.uId = (UINT_PTR)m_hwndSearchRegex;
+        ti.lpszText = (LPWSTR)L"Use Regular Expression";
+        SendMessage(m_hwndSearchTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+    }
 
     // Create List View (Left Panel)
     m_hwndList = CreateWindow(WC_LISTVIEW, L"", 
@@ -1467,6 +1618,7 @@ void MainWindow::OnSize(int width, int height) {
 
     // Resize Search Box
     MoveWindow(m_hwndSearch, 0, toolbarHeight, listWidth, searchHeight, TRUE);
+    PositionSearchButtons();
 
     // Resize List View
     MoveWindow(m_hwndList, 0, toolbarHeight + searchHeight, listWidth, clientHeight - searchHeight, TRUE);
@@ -1534,6 +1686,33 @@ void MainWindow::OnSize(int width, int height) {
         SendMessage(m_hwndEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(margin, margin));
         SendMessage(m_hwndPreview, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(margin, margin));
     }
+}
+
+void MainWindow::PositionSearchButtons() {
+    if (!m_hwndSearch || !m_hwndSearchMatchCase || !m_hwndSearchWholeWord || !m_hwndSearchRegex) {
+        return;
+    }
+
+    RECT rc;
+    GetClientRect(m_hwndSearch, &rc);
+    int height = rc.bottom - rc.top;
+    if (height <= 0) return;
+
+    const int paddingRight = 4;
+    const int gap = 2;
+    int btnHeight = std::max(16, height - 6);
+    int btnWidth = btnHeight + 4;
+    int totalWidth = btnWidth * 3 + gap * 2;
+
+    int x = rc.right - paddingRight - totalWidth;
+    int y = (height - btnHeight) / 2;
+
+    MoveWindow(m_hwndSearchMatchCase, x, y, btnWidth, btnHeight, TRUE);
+    MoveWindow(m_hwndSearchWholeWord, x + btnWidth + gap, y, btnWidth, btnHeight, TRUE);
+    MoveWindow(m_hwndSearchRegex, x + (btnWidth + gap) * 2, y, btnWidth, btnHeight, TRUE);
+
+    m_searchButtonAreaWidth = totalWidth + paddingRight + 2;
+    SendMessage(m_hwndSearch, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(4, m_searchButtonAreaWidth));
 }
 
 void MainWindow::UpdateStatusBarParts(int statusWidth) {
@@ -1660,6 +1839,25 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
         break;
     case IDM_SEARCH_MODE_TOGGLE:
         ToggleSearchMode();
+        break;
+    case ID_SEARCH_MATCHCASE:
+    case ID_SEARCH_WHOLEWORD:
+    case ID_SEARCH_REGEX:
+        {
+            m_searchMatchCase = GetSearchToggleState(m_hwndSearchMatchCase);
+            m_searchWholeWord = GetSearchToggleState(m_hwndSearchWholeWord);
+            m_searchUseRegex = GetSearchToggleState(m_hwndSearchRegex);
+
+            InvalidateRect(m_hwndSearchMatchCase, NULL, TRUE);
+            InvalidateRect(m_hwndSearchWholeWord, NULL, TRUE);
+            InvalidateRect(m_hwndSearchRegex, NULL, TRUE);
+
+            int len = GetWindowTextLength(m_hwndSearch);
+            std::vector<wchar_t> buf(len + 1);
+            GetWindowText(m_hwndSearch, &buf[0], len + 1);
+            bool autoSelect = !m_isNewNote;
+            LoadNotesList(&buf[0], m_searchTitleOnly, autoSelect);
+        }
         break;
     case IDM_HIST_BACK:
         NavigateHistory(-1);
@@ -1813,12 +2011,9 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
             if (!m_isNewNote && m_currentNoteId == -1) {
                 m_isNewNote = true;
                 m_newNoteTagId = m_selectedTagId;
-                SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"Entering new note mode for current tag filter");
             }
 
             m_isDirty = true;
-            // Debug: Show that EN_CHANGE fired
-            SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)L"EN_CHANGE: m_isDirty set to true");
             UpdateWindowTitle();
             ScheduleSpellCheck();
         }
@@ -2354,6 +2549,33 @@ void MainWindow::LoadNotesList(const std::wstring& filter, bool titleOnly, bool 
     m_notes = m_db->GetAllNotes(m_showArchived, m_sortBy);
     m_filteredIndices.clear();
     m_currentSearchFilter = filter;
+
+    const bool useRegex = m_searchUseRegex;
+    const bool matchCase = m_searchMatchCase;
+    const bool wholeWord = m_searchWholeWord;
+    bool regexValid = true;
+    std::wregex regexPattern;
+    std::wstring filterSearch = filter;
+
+    if (!filter.empty()) {
+        if (useRegex) {
+            std::wstring pattern = filter;
+            if (wholeWord) {
+                pattern = L"\\b(?:" + pattern + L")\\b";
+            }
+            try {
+                auto flags = std::regex_constants::ECMAScript;
+                if (!matchCase) {
+                    flags |= std::regex_constants::icase;
+                }
+                regexPattern = std::wregex(pattern, flags);
+            } catch (const std::regex_error&) {
+                regexValid = false;
+            }
+        } else if (!matchCase) {
+            for (auto& c : filterSearch) c = towlower(c);
+        }
+    }
     
     LVITEM lvi;
     lvi.mask = LVIF_TEXT | LVIF_PARAM;
@@ -2383,25 +2605,42 @@ void MainWindow::LoadNotesList(const std::wstring& filter, bool titleOnly, bool 
         }
 
         if (match && !filter.empty()) {
-            // Simple case-insensitive search
-            std::wstring wTitleLower = wTitle;
-            std::wstring wContentLower = wContent;
-            std::wstring filterLower = filter;
-            
-            for (auto& c : wTitleLower) c = towlower(c);
-            for (auto& c : wContentLower) c = towlower(c);
-            for (auto& c : filterLower) c = towlower(c);
-            
-            if (titleOnly) {
-                // Title only search
-                if (wTitleLower.find(filterLower) == std::wstring::npos) {
+            if (useRegex) {
+                if (!regexValid) {
                     match = false;
+                } else if (titleOnly) {
+                    if (!std::regex_search(wTitle, regexPattern)) {
+                        match = false;
+                    }
+                } else {
+                    if (!std::regex_search(wTitle, regexPattern) && !std::regex_search(wContent, regexPattern)) {
+                        match = false;
+                    }
                 }
             } else {
-                // Title and content search
-                if (wTitleLower.find(filterLower) == std::wstring::npos && 
-                    wContentLower.find(filterLower) == std::wstring::npos) {
-                    match = false;
+                std::wstring wTitleSearch = wTitle;
+                std::wstring wContentSearch = wContent;
+                if (!matchCase) {
+                    for (auto& c : wTitleSearch) c = towlower(c);
+                    for (auto& c : wContentSearch) c = towlower(c);
+                }
+
+                if (titleOnly) {
+                    if (wholeWord) {
+                        if (!ContainsWholeWord(wTitleSearch, filterSearch)) {
+                            match = false;
+                        }
+                    } else if (wTitleSearch.find(filterSearch) == std::wstring::npos) {
+                        match = false;
+                    }
+                } else {
+                    bool titleMatch = wholeWord ? ContainsWholeWord(wTitleSearch, filterSearch)
+                                                : (wTitleSearch.find(filterSearch) != std::wstring::npos);
+                    bool contentMatch = wholeWord ? ContainsWholeWord(wContentSearch, filterSearch)
+                                                  : (wContentSearch.find(filterSearch) != std::wstring::npos);
+                    if (!titleMatch && !contentMatch) {
+                        match = false;
+                    }
                 }
             }
         }

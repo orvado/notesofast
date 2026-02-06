@@ -16,6 +16,7 @@ public:
 
     BOOL Create(PCWSTR lpWindowName, DWORD dwStyle, DWORD dwExStyle = 0, int x = CW_USEDEFAULT, int y = CW_USEDEFAULT, int nWidth = CW_USEDEFAULT, int nHeight = CW_USEDEFAULT, HWND hWndParent = 0, HMENU hMenu = 0);
     HWND Window() const { return m_hwnd; }
+    int GetSearchButtonAreaWidth() const { return m_searchButtonAreaWidth; }
     
     // Public for window procedure callbacks
     void NavigateSearchHistory(int offset);
@@ -91,6 +92,10 @@ protected:
     HWND m_hwndEdit;
     HWND m_hwndPreview;
     HWND m_hwndSearch;
+    HWND m_hwndSearchMatchCase;
+    HWND m_hwndSearchWholeWord;
+    HWND m_hwndSearchRegex;
+    HWND m_hwndSearchTooltip;
     HWND m_hwndToolbar;
     HWND m_hwndMarkdownToolbar;
     HWND m_hwndStatus;
@@ -128,6 +133,9 @@ protected:
     HFONT m_hEditorFont = NULL;
     bool m_hotkeysRegistered = false;
     bool m_searchTitleOnly = false;
+    bool m_searchMatchCase = false;
+    bool m_searchWholeWord = false;
+    bool m_searchUseRegex = false;
     std::wstring m_currentSearchFilter = L"";
     std::vector<int> m_history;
     int m_historyPos = -1;
@@ -154,6 +162,7 @@ protected:
     int m_searchHistoryPos = -1;
     std::string m_lastSearchTerm;
     DWORD m_lastSearchChangeTime = 0;
+    int m_searchButtonAreaWidth = 0;
 
     // Spell checking
     std::unique_ptr<SpellChecker> m_spellChecker;
@@ -176,4 +185,5 @@ protected:
     void ResetWordUndoState();
 
     void ApplyEditorFontFromSettings();
+    void PositionSearchButtons();
 };
