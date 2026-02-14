@@ -27,6 +27,7 @@ public:
     Database* GetDatabase() const { return m_db; }
 
     void CancelChecklistItemEdit();
+    bool UndoChecklistDelete();
 
     bool ReorderChecklistItem(int sourceIndex, int insertIndex);
     int GetChecklistInsertIndexFromScreenPoint(POINTL ptScreen) const;
@@ -69,6 +70,9 @@ protected:
     void MoveChecklistItemUp();
     void MoveChecklistItemDown();
     void BeginChecklistItemDrag(int sourceIndex);
+    bool DeleteChecklistItemAtIndex(int index, bool recordUndo = true);
+    void SetChecklistHoverIndex(int index);
+    bool GetChecklistDeleteButtonRect(int index, RECT& rc) const;
     void ToggleChecklistItemCheck(int index);
     void ToggleFormat(DWORD mask, DWORD effect);
     void UpdateFormatButtons();
@@ -184,6 +188,7 @@ protected:
     std::wstring m_currentWord;
     LONG m_currentWordStart = -1;
     static LRESULT CALLBACK RichEditSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR idSubclass, DWORD_PTR refData);
+    static LRESULT CALLBACK ChecklistListSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR idSubclass, DWORD_PTR refData);
     void DrawSpellUnderlines(HDC hdc) const;
     POINT GetCharPosition(int index) const;
     void FinalizeCurrentWord();
@@ -193,4 +198,14 @@ protected:
 
     void ApplyEditorFontFromSettings();
     void PositionSearchButtons();
+    void UpdateChecklistListColumnWidth();
+
+    struct ChecklistDeleteUndoEntry {
+        int noteId;
+        ChecklistItem item;
+        int index;
+    };
+    std::vector<ChecklistDeleteUndoEntry> m_checklistDeleteUndo;
+    int m_checklistHoverIndex = -1;
+    bool m_checklistTrackingMouseLeave = false;
 };

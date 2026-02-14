@@ -865,6 +865,13 @@ static void ApplySnippetReplacementInRichEdit(HWND hwnd, LONG tokenStart, LONG t
 }
 
 LRESULT CALLBACK ChecklistEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_KEYDOWN && (GetKeyState(VK_CONTROL) & 0x8000) != 0 && (wParam == 'Z' || wParam == 'z')) {
+        MainWindow* pWindow = (MainWindow*)GetWindowLongPtr(GetParent(hwnd), GWLP_USERDATA);
+        if (pWindow && pWindow->UndoChecklistDelete()) {
+            return 0;
+        }
+    }
+
     if (uMsg == WM_KEYDOWN && wParam == VK_ESCAPE) {
         MainWindow* pWindow = (MainWindow*)GetWindowLongPtr(GetParent(hwnd), GWLP_USERDATA);
         if (pWindow) {
@@ -1020,6 +1027,80 @@ LRESULT CALLBACK SearchEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     }
     
     return CallWindowProc(g_oldSearchProc, hwnd, uMsg, wParam, lParam);
+}
+
+LRESULT CALLBACK MainWindow::ChecklistListSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR idSubclass, DWORD_PTR refData) {
+    MainWindow* self = reinterpret_cast<MainWindow*>(refData);
+    if (!self) {
+        return DefSubclassProc(hwnd, uMsg, wParam, lParam);
+    }
+
+    switch (uMsg) {
+    case WM_MOUSEMOVE:
+        {
+            if (!self->m_checklistTrackingMouseLeave) {
+                TRACKMOUSEEVENT tme = {};
+                tme.cbSize = sizeof(tme);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                if (TrackMouseEvent(&tme)) {
+                    self->m_checklistTrackingMouseLeave = true;
+                }
+            }
+
+            POINT pt = { (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam) };
+            int hoverIndex = -1;
+
+            RECT rcClient = {};
+            GetClientRect(hwnd, &rcClient);
+            if (pt.x >= 0 && pt.y >= 0 && pt.x < rcClient.right && pt.y < rcClient.bottom) {
+                LVHITTESTINFO hti = {};
+                hti.pt = pt;
+                int hit = ListView_HitTest(hwnd, &hti);
+                if (hit >= 0) {
+                    hoverIndex = hit;
+                } else {
+                    int top = ListView_GetTopIndex(hwnd);
+                    int perPage = ListView_GetCountPerPage(hwnd);
+                    int count = ListView_GetItemCount(hwnd);
+                    int end = std::min(count, top + perPage + 1);
+                    for (int i = top; i < end; ++i) {
+                        RECT rcItem = {};
+                        if (ListView_GetItemRect(hwnd, i, &rcItem, LVIR_BOUNDS) && pt.y >= rcItem.top && pt.y < rcItem.bottom) {
+                            hoverIndex = i;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            self->SetChecklistHoverIndex(hoverIndex);
+        }
+        break;
+    case WM_MOUSELEAVE:
+        self->m_checklistTrackingMouseLeave = false;
+        self->SetChecklistHoverIndex(-1);
+        break;
+    case WM_LBUTTONDOWN:
+        if (self->m_checklistHoverIndex >= 0) {
+            POINT pt = { (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam) };
+            RECT rcDelete = {};
+            if (self->GetChecklistDeleteButtonRect(self->m_checklistHoverIndex, rcDelete) && PtInRect(&rcDelete, pt)) {
+                self->DeleteChecklistItemAtIndex(self->m_checklistHoverIndex, true);
+                return 0;
+            }
+        }
+        break;
+    case WM_KEYDOWN:
+        if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && (wParam == 'Z' || wParam == 'z')) {
+            if (self->UndoChecklistDelete()) {
+                return 0;
+            }
+        }
+        break;
+    }
+
+    return DefSubclassProc(hwnd, uMsg, wParam, lParam);
 }
 
 MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdit(NULL), m_hwndSearch(NULL), 
@@ -1708,6 +1789,7 @@ void MainWindow::OnCreate() {
         WS_CHILD | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SHOWSELALWAYS | LVS_SINGLESEL,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_CHECKLIST_LIST, GetModuleHandle(NULL), NULL);
     SendMessage(m_hwndChecklistList, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SetWindowSubclass(m_hwndChecklistList, ChecklistListSubclassProc, 3, (DWORD_PTR)this);
     
     LVCOLUMN lvcChecklist;
     lvcChecklist.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
@@ -1914,6 +1996,7 @@ void MainWindow::OnSize(int width, int height) {
         
         // Checklist list
         MoveWindow(m_hwndChecklistList, rightPaneX, checklistTop, rightPaneWidth, checklistHeight, TRUE);
+        UpdateChecklistListColumnWidth();
         
         ShowWindow(m_hwndMarkdownToolbar, SW_HIDE);
     } else {
@@ -2570,6 +2653,11 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
                 CancelChecklistItemEdit();
                 return 0;
             }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && (kd->wVKey == 'Z' || kd->wVKey == 'z')) {
+                if (UndoChecklistDelete()) {
+                    return 0;
+                }
+            }
         }
         if (pnmh->code == LVN_BEGINDRAG) {
             LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
@@ -2601,16 +2689,81 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
             case CDDS_ITEMPREPAINT:
                 {
                     int index = (int)lplvcd->nmcd.dwItemSpec;
+                    RECT rcItem = {};
+                    if (!ListView_GetItemRect(m_hwndChecklistList, index, &rcItem, LVIR_BOUNDS)) {
+                        return CDRF_DODEFAULT;
+                    }
+
+                    bool selected = (ListView_GetItemState(m_hwndChecklistList, index, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+                    COLORREF bkColor = selected ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
+
+                    HBRUSH bg = CreateSolidBrush(bkColor);
+                    FillRect(lplvcd->nmcd.hdc, &rcItem, bg);
+                    DeleteObject(bg);
+
+                    bool isChecked = false;
                     if (m_currentNoteIndex >= 0 && index >= 0 && index < (int)m_notes[m_currentNoteIndex].checklist_items.size()) {
                         const ChecklistItem& it = m_notes[m_currentNoteIndex].checklist_items[index];
-                        // Checked items render gray, unchecked items render standard black
-                        if (it.is_checked) {
-                            lplvcd->clrText = RGB(128, 128, 128);
-                        } else {
-                            lplvcd->clrText = RGB(0, 0, 0);
+                        isChecked = it.is_checked;
+                    }
+
+                    COLORREF textColor = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 0, 0);
+                    if (!selected && isChecked) {
+                        textColor = RGB(128, 128, 128);
+                    }
+
+                    wchar_t itemText[2048] = {0};
+                    ListView_GetItemText(m_hwndChecklistList, index, 0, itemText, 2047);
+
+                    RECT rcText = rcItem;
+                    rcText.left += 6;
+                    rcText.right -= 6;
+
+                    if (index == m_checklistHoverIndex) {
+                        RECT rcDelete = {};
+                        if (GetChecklistDeleteButtonRect(index, rcDelete)) {
+                            rcText.right = rcDelete.left - 4;
                         }
                     }
-                    return CDRF_NEWFONT;
+
+                    SetBkMode(lplvcd->nmcd.hdc, TRANSPARENT);
+                    SetTextColor(lplvcd->nmcd.hdc, textColor);
+
+                    HFONT hStrikeFont = NULL;
+                    HGDIOBJ oldFont = NULL;
+                    if (isChecked) {
+                        HFONT hBaseFont = (HFONT)SendMessage(m_hwndChecklistList, WM_GETFONT, 0, 0);
+                        LOGFONTW lf = {};
+                        if (hBaseFont && GetObjectW(hBaseFont, sizeof(lf), &lf) == sizeof(lf)) {
+                            lf.lfStrikeOut = TRUE;
+                            hStrikeFont = CreateFontIndirectW(&lf);
+                            if (hStrikeFont) {
+                                oldFont = SelectObject(lplvcd->nmcd.hdc, hStrikeFont);
+                            }
+                        }
+                    }
+
+                    DrawTextW(lplvcd->nmcd.hdc, itemText, -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+                    if (oldFont) {
+                        SelectObject(lplvcd->nmcd.hdc, oldFont);
+                    }
+                    if (hStrikeFont) {
+                        DeleteObject(hStrikeFont);
+                    }
+
+                    if (index == m_checklistHoverIndex) {
+                        RECT rcDelete = {};
+                        if (GetChecklistDeleteButtonRect(index, rcDelete)) {
+                            FillRect(lplvcd->nmcd.hdc, &rcDelete, (HBRUSH)(COLOR_BTNFACE + 1));
+                            FrameRect(lplvcd->nmcd.hdc, &rcDelete, (HBRUSH)(COLOR_3DSHADOW + 1));
+                            SetBkMode(lplvcd->nmcd.hdc, TRANSPARENT);
+                            SetTextColor(lplvcd->nmcd.hdc, RGB(160, 0, 0));
+                            DrawTextW(lplvcd->nmcd.hdc, L"x", 1, &rcDelete, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                        }
+                    }
+
+                    return CDRF_SKIPDEFAULT;
                 }
             }
         }
@@ -3981,6 +4134,7 @@ void MainWindow::UpdateChecklistUI() {
         
         // Load checklist items
         ListView_DeleteAllItems(m_hwndChecklistList);
+        m_checklistHoverIndex = -1;
         int checkedCount = 0;
         for (const auto& item : m_notes[m_currentNoteIndex].checklist_items) {
             if (item.is_checked) checkedCount++;
@@ -3997,6 +4151,8 @@ void MainWindow::UpdateChecklistUI() {
             
             ListView_InsertItem(m_hwndChecklistList, &lvi);
         }
+
+        UpdateChecklistListColumnWidth();
         
         // Update status bar with progress
         int totalItems = (int)m_notes[m_currentNoteIndex].checklist_items.size();
@@ -4026,6 +4182,186 @@ void MainWindow::UpdateChecklistUI() {
         std::wstring statusText = L"Notes: " + std::to_wstring(m_notes.size());
         SendMessage(m_hwndStatus, SB_SETTEXT, 0, (LPARAM)statusText.c_str());
     }
+}
+
+void MainWindow::UpdateChecklistListColumnWidth() {
+    if (!m_hwndChecklistList) {
+        return;
+    }
+
+    RECT rcClient = {0};
+    GetClientRect(m_hwndChecklistList, &rcClient);
+    int width = rcClient.right - rcClient.left;
+    if (width < 1) width = 1;
+
+    // Keep text render width aligned to the visible pane width.
+    ListView_SetColumnWidth(m_hwndChecklistList, 0, width);
+}
+
+void MainWindow::SetChecklistHoverIndex(int index) {
+    if (index == m_checklistHoverIndex) {
+        return;
+    }
+
+    int oldIndex = m_checklistHoverIndex;
+    m_checklistHoverIndex = index;
+
+    RECT rc = {};
+    if (oldIndex >= 0 && m_hwndChecklistList && ListView_GetItemRect(m_hwndChecklistList, oldIndex, &rc, LVIR_BOUNDS)) {
+        InvalidateRect(m_hwndChecklistList, &rc, FALSE);
+    }
+    if (m_checklistHoverIndex >= 0 && m_hwndChecklistList && ListView_GetItemRect(m_hwndChecklistList, m_checklistHoverIndex, &rc, LVIR_BOUNDS)) {
+        InvalidateRect(m_hwndChecklistList, &rc, FALSE);
+    }
+}
+
+bool MainWindow::GetChecklistDeleteButtonRect(int index, RECT& rc) const {
+    if (!m_hwndChecklistList || index < 0) {
+        return false;
+    }
+
+    RECT rcItem = {};
+    if (!ListView_GetItemRect(m_hwndChecklistList, index, &rcItem, LVIR_BOUNDS)) {
+        return false;
+    }
+
+    RECT rcClient = {0};
+    GetClientRect(m_hwndChecklistList, &rcClient);
+
+    const int kBtnSize = 14;
+    const int kRightPadding = 6;
+    const int kLeftPadding = 6;
+    const int kGapAfterText = 4;
+
+    int rightEdgeRight = rcClient.right - kRightPadding;
+    int rightEdgeLeft = rightEdgeRight - kBtnSize;
+
+    // Prefer placing the button right after visible item text.
+    int textBasedLeft = rightEdgeLeft;
+    wchar_t itemText[2048] = {0};
+    ListView_GetItemText(m_hwndChecklistList, index, 0, itemText, 2047);
+
+    HDC hdc = GetDC(m_hwndChecklistList);
+    if (hdc) {
+        HFONT hFont = (HFONT)SendMessage(m_hwndChecklistList, WM_GETFONT, 0, 0);
+        HGDIOBJ oldFont = hFont ? SelectObject(hdc, hFont) : NULL;
+
+        SIZE sz = {0};
+        if (GetTextExtentPoint32W(hdc, itemText, (int)wcslen(itemText), &sz)) {
+            textBasedLeft = rcItem.left + kLeftPadding + sz.cx + kGapAfterText;
+        }
+
+        if (oldFont) SelectObject(hdc, oldFont);
+        ReleaseDC(m_hwndChecklistList, hdc);
+    }
+
+    // Fallback to right edge if text-based position would overflow.
+    if (textBasedLeft + kBtnSize + kRightPadding > rcClient.right) {
+        textBasedLeft = rightEdgeLeft;
+    }
+
+    if (textBasedLeft < rcItem.left + kLeftPadding) {
+        textBasedLeft = rcItem.left + kLeftPadding;
+    }
+
+    rc.left = textBasedLeft;
+    rc.right = rc.left + kBtnSize;
+    rc.top = rcItem.top + ((rcItem.bottom - rcItem.top - kBtnSize) / 2);
+    rc.bottom = rc.top + kBtnSize;
+    return true;
+}
+
+bool MainWindow::DeleteChecklistItemAtIndex(int index, bool recordUndo) {
+    if (m_currentNoteIndex < 0 || m_currentNoteIndex >= (int)m_notes.size()) {
+        return false;
+    }
+
+    auto& items = m_notes[m_currentNoteIndex].checklist_items;
+    if (index < 0 || index >= (int)items.size()) {
+        return false;
+    }
+
+    ChecklistItem toDelete = items[index];
+
+    if (!m_db->DeleteChecklistItem(toDelete.id)) {
+        return false;
+    }
+
+    if (recordUndo) {
+        ChecklistDeleteUndoEntry entry = {};
+        entry.noteId = m_notes[m_currentNoteIndex].id;
+        entry.item = toDelete;
+        entry.index = index;
+        m_checklistDeleteUndo.push_back(entry);
+        if (m_checklistDeleteUndo.size() > 64) {
+            m_checklistDeleteUndo.erase(m_checklistDeleteUndo.begin());
+        }
+    }
+
+    items.erase(items.begin() + index);
+    for (int i = 0; i < (int)items.size(); ++i) {
+        items[i].item_order = i;
+        m_db->UpdateChecklistItem(items[i]);
+    }
+
+    if (toDelete.id == m_editingChecklistItemId) {
+        CancelChecklistItemEdit();
+    }
+
+    UpdateChecklistUI();
+
+    int newSelection = index;
+    if (newSelection >= (int)items.size()) {
+        newSelection = (int)items.size() - 1;
+    }
+    if (newSelection >= 0) {
+        m_suppressChecklistSelectionEdit = true;
+        ListView_SetItemState(m_hwndChecklistList, newSelection, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        m_suppressChecklistSelectionEdit = false;
+    }
+
+    return true;
+}
+
+bool MainWindow::UndoChecklistDelete() {
+    if (!m_checklistMode || m_currentNoteIndex < 0 || m_currentNoteIndex >= (int)m_notes.size()) {
+        return false;
+    }
+    if (m_checklistDeleteUndo.empty()) {
+        return false;
+    }
+
+    const ChecklistDeleteUndoEntry entry = m_checklistDeleteUndo.back();
+    if (entry.noteId != m_notes[m_currentNoteIndex].id) {
+        return false;
+    }
+
+    auto& items = m_notes[m_currentNoteIndex].checklist_items;
+    int insertIndex = entry.index;
+    if (insertIndex < 0) insertIndex = 0;
+    if (insertIndex > (int)items.size()) insertIndex = (int)items.size();
+
+    ChecklistItem restored = entry.item;
+    restored.note_id = m_notes[m_currentNoteIndex].id;
+    restored.item_order = insertIndex;
+    restored.id = 0;
+    if (!m_db->CreateChecklistItem(restored)) {
+        return false;
+    }
+
+    items.insert(items.begin() + insertIndex, restored);
+    for (int i = 0; i < (int)items.size(); ++i) {
+        items[i].item_order = i;
+        m_db->UpdateChecklistItem(items[i]);
+    }
+
+    m_checklistDeleteUndo.pop_back();
+    UpdateChecklistUI();
+
+    m_suppressChecklistSelectionEdit = true;
+    ListView_SetItemState(m_hwndChecklistList, insertIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    m_suppressChecklistSelectionEdit = false;
+    return true;
 }
 
 void MainWindow::UpdateNoteTagCombo() {
@@ -4122,29 +4458,7 @@ void MainWindow::RemoveChecklistItem() {
     if (m_currentNoteIndex >= 0) {
         int selected = ListView_GetNextItem(m_hwndChecklistList, -1, LVNI_SELECTED);
         if (selected >= 0) {
-            LVITEM lvi;
-            lvi.mask = LVIF_PARAM;
-            lvi.iItem = selected;
-            lvi.iSubItem = 0;
-            ListView_GetItem(m_hwndChecklistList, &lvi);
-            
-            int itemId = (int)lvi.lParam;
-            if (itemId == m_editingChecklistItemId) {
-                CancelChecklistItemEdit();
-            }
-            if (m_db->DeleteChecklistItem(itemId)) {
-                auto& items = m_notes[m_currentNoteIndex].checklist_items;
-                items.erase(std::remove_if(items.begin(), items.end(),
-                    [itemId](const ChecklistItem& item) { return item.id == itemId; }), items.end());
-                
-                // Reorder remaining items
-                for (size_t i = 0; i < items.size(); ++i) {
-                    items[i].item_order = (int)i;
-                    m_db->UpdateChecklistItem(items[i]);
-                }
-                
-                UpdateChecklistUI();
-            }
+            DeleteChecklistItemAtIndex(selected, true);
         }
     }
 }
