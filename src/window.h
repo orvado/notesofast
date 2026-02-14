@@ -9,6 +9,8 @@
 #include "note.h"
 #include "spell_checker.h"
 
+struct IDropTarget;
+
 class MainWindow {
 public:
     MainWindow(Database* db);
@@ -25,6 +27,9 @@ public:
     Database* GetDatabase() const { return m_db; }
 
     void CancelChecklistItemEdit();
+
+    bool ReorderChecklistItem(int sourceIndex, int insertIndex);
+    int GetChecklistInsertIndexFromScreenPoint(POINTL ptScreen) const;
 
 protected:
     virtual LRESULT HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -63,6 +68,7 @@ protected:
     void RemoveChecklistItem();
     void MoveChecklistItemUp();
     void MoveChecklistItemDown();
+    void BeginChecklistItemDrag(int sourceIndex);
     void ToggleChecklistItemCheck(int index);
     void ToggleFormat(DWORD mask, DWORD effect);
     void UpdateFormatButtons();
@@ -105,6 +111,7 @@ protected:
     HWND m_hwndRemoveItem;
     HWND m_hwndMoveUp;
     HWND m_hwndMoveDown;
+    IDropTarget* m_checklistDropTarget = NULL;
 
     Database* m_db;
     std::vector<Note> m_notes;

@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <process.h>
+#include <ole2.h>
 
 static std::string ToLowerAscii(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) {
@@ -525,6 +526,233 @@ static unsigned __stdcall CloudAutoSyncThread(void* p) {
 WNDPROC g_oldEditProc = NULL;
 WNDPROC g_oldSearchProc = NULL;
 
+static CLIPFORMAT g_cfChecklistIndex = 0;
+
+class ChecklistDataObject : public IDataObject {
+public:
+    explicit ChecklistDataObject(int sourceIndex) : m_refCount(1), m_sourceIndex(sourceIndex) {}
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+        if (!ppvObject) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDataObject) {
+            *ppvObject = static_cast<IDataObject*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override {
+        return (ULONG)InterlockedIncrement(&m_refCount);
+    }
+
+    STDMETHODIMP_(ULONG) Release() override {
+        ULONG count = (ULONG)InterlockedDecrement(&m_refCount);
+        if (count == 0) {
+            delete this;
+        }
+        return count;
+    }
+
+    STDMETHODIMP GetData(FORMATETC* pformatetcIn, STGMEDIUM* pmedium) override {
+        if (!pformatetcIn || !pmedium) return E_INVALIDARG;
+        if (pformatetcIn->cfFormat != g_cfChecklistIndex || !(pformatetcIn->tymed & TYMED_HGLOBAL)) {
+            return DV_E_FORMATETC;
+        }
+
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(int));
+        if (!hMem) return E_OUTOFMEMORY;
+
+        void* p = GlobalLock(hMem);
+        if (!p) {
+            GlobalFree(hMem);
+            return E_OUTOFMEMORY;
+        }
+        memcpy(p, &m_sourceIndex, sizeof(int));
+        GlobalUnlock(hMem);
+
+        pmedium->tymed = TYMED_HGLOBAL;
+        pmedium->hGlobal = hMem;
+        pmedium->pUnkForRelease = nullptr;
+        return S_OK;
+    }
+
+    STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return DATA_E_FORMATETC; }
+    STDMETHODIMP QueryGetData(FORMATETC* pformatetc) override {
+        if (!pformatetc) return E_INVALIDARG;
+        if (pformatetc->cfFormat == g_cfChecklistIndex && (pformatetc->tymed & TYMED_HGLOBAL)) {
+            return S_OK;
+        }
+        return DV_E_FORMATETC;
+    }
+    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* pformatetcOut) override {
+        if (pformatetcOut) pformatetcOut->ptd = nullptr;
+        return E_NOTIMPL;
+    }
+    STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    STDMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override { return E_NOTIMPL; }
+    STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+
+private:
+    ~ChecklistDataObject() = default;
+    LONG m_refCount;
+    int m_sourceIndex;
+};
+
+class ChecklistDropSource : public IDropSource {
+public:
+    ChecklistDropSource() : m_refCount(1) {}
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+        if (!ppvObject) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDropSource) {
+            *ppvObject = static_cast<IDropSource*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override {
+        return (ULONG)InterlockedIncrement(&m_refCount);
+    }
+
+    STDMETHODIMP_(ULONG) Release() override {
+        ULONG count = (ULONG)InterlockedDecrement(&m_refCount);
+        if (count == 0) {
+            delete this;
+        }
+        return count;
+    }
+
+    STDMETHODIMP QueryContinueDrag(BOOL fEscapePressed, DWORD grfKeyState) override {
+        if (fEscapePressed) return DRAGDROP_S_CANCEL;
+        if ((grfKeyState & MK_LBUTTON) == 0) return DRAGDROP_S_DROP;
+        return S_OK;
+    }
+
+    STDMETHODIMP GiveFeedback(DWORD) override {
+        return DRAGDROP_S_USEDEFAULTCURSORS;
+    }
+
+private:
+    ~ChecklistDropSource() = default;
+    LONG m_refCount;
+};
+
+static bool GetChecklistSourceIndexFromDataObject(IDataObject* dataObject, int& sourceIndex) {
+    sourceIndex = -1;
+    if (!dataObject || g_cfChecklistIndex == 0) return false;
+
+    FORMATETC fmt = {};
+    fmt.cfFormat = g_cfChecklistIndex;
+    fmt.dwAspect = DVASPECT_CONTENT;
+    fmt.lindex = -1;
+    fmt.tymed = TYMED_HGLOBAL;
+
+    STGMEDIUM stg = {};
+    HRESULT hr = dataObject->GetData(&fmt, &stg);
+    if (FAILED(hr)) return false;
+
+    bool ok = false;
+    if (stg.tymed == TYMED_HGLOBAL && stg.hGlobal) {
+        void* p = GlobalLock(stg.hGlobal);
+        if (p) {
+            memcpy(&sourceIndex, p, sizeof(int));
+            GlobalUnlock(stg.hGlobal);
+            ok = true;
+        }
+    }
+    ReleaseStgMedium(&stg);
+    return ok;
+}
+
+class ChecklistDropTarget : public IDropTarget {
+public:
+    explicit ChecklistDropTarget(MainWindow* owner) : m_refCount(1), m_owner(owner) {}
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+        if (!ppvObject) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDropTarget) {
+            *ppvObject = static_cast<IDropTarget*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override {
+        return (ULONG)InterlockedIncrement(&m_refCount);
+    }
+
+    STDMETHODIMP_(ULONG) Release() override {
+        ULONG count = (ULONG)InterlockedDecrement(&m_refCount);
+        if (count == 0) {
+            delete this;
+        }
+        return count;
+    }
+
+    STDMETHODIMP DragEnter(IDataObject* pDataObj, DWORD, POINTL pt, DWORD* pdwEffect) override {
+        if (!pdwEffect || !m_owner) return E_INVALIDARG;
+
+        int sourceIndex = -1;
+        if (!GetChecklistSourceIndexFromDataObject(pDataObj, sourceIndex)) {
+            *pdwEffect = DROPEFFECT_NONE;
+            return S_OK;
+        }
+
+        int insertIndex = m_owner->GetChecklistInsertIndexFromScreenPoint(pt);
+        if (insertIndex < 0) {
+            *pdwEffect = DROPEFFECT_NONE;
+            return S_OK;
+        }
+
+        *pdwEffect = DROPEFFECT_MOVE;
+        return S_OK;
+    }
+
+    STDMETHODIMP DragOver(DWORD, POINTL pt, DWORD* pdwEffect) override {
+        if (!pdwEffect || !m_owner) return E_INVALIDARG;
+        int insertIndex = m_owner->GetChecklistInsertIndexFromScreenPoint(pt);
+        *pdwEffect = (insertIndex >= 0) ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
+        return S_OK;
+    }
+
+    STDMETHODIMP DragLeave() override {
+        return S_OK;
+    }
+
+    STDMETHODIMP Drop(IDataObject* pDataObj, DWORD, POINTL pt, DWORD* pdwEffect) override {
+        if (!pdwEffect || !m_owner) return E_INVALIDARG;
+
+        int sourceIndex = -1;
+        if (!GetChecklistSourceIndexFromDataObject(pDataObj, sourceIndex)) {
+            *pdwEffect = DROPEFFECT_NONE;
+            return S_OK;
+        }
+
+        int insertIndex = m_owner->GetChecklistInsertIndexFromScreenPoint(pt);
+        if (insertIndex < 0 || !m_owner->ReorderChecklistItem(sourceIndex, insertIndex)) {
+            *pdwEffect = DROPEFFECT_NONE;
+            return S_OK;
+        }
+
+        *pdwEffect = DROPEFFECT_MOVE;
+        return S_OK;
+    }
+
+private:
+    ~ChecklistDropTarget() = default;
+    LONG m_refCount;
+    MainWindow* m_owner;
+};
+
 static const wchar_t* kSearchCueText = L"Search (\x2191\x2193 for History)";
 
 static bool GetSearchToggleState(HWND btn) {
@@ -944,6 +1172,13 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_DESTROY:
         SaveCurrentNote();
+        if (m_hwndChecklistList) {
+            RevokeDragDrop(m_hwndChecklistList);
+        }
+        if (m_checklistDropTarget) {
+            m_checklistDropTarget->Release();
+            m_checklistDropTarget = NULL;
+        }
         UnregisterHotkeys();
         KillTimer(m_hwnd, ID_SPELLCHECK_TIMER);
         KillTimer(m_hwnd, ID_CLOUDSYNC_TIMER);
@@ -1040,6 +1275,10 @@ void MainWindow::SyncDatabaseOnExitIfEnabled() {
 }
 
 void MainWindow::OnCreate() {
+    if (g_cfChecklistIndex == 0) {
+        g_cfChecklistIndex = (CLIPFORMAT)RegisterClipboardFormatW(L"NoteSoFast.ChecklistSourceIndex");
+    }
+
     // Initialize Common Controls
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -1478,6 +1717,15 @@ void MainWindow::OnCreate() {
     lvcChecklist.fmt = LVCFMT_LEFT;
     ListView_InsertColumn(m_hwndChecklistList, 0, &lvcChecklist);
 
+    m_checklistDropTarget = new ChecklistDropTarget(this);
+    if (m_checklistDropTarget) {
+        HRESULT hr = RegisterDragDrop(m_hwndChecklistList, m_checklistDropTarget);
+        if (FAILED(hr)) {
+            m_checklistDropTarget->Release();
+            m_checklistDropTarget = NULL;
+        }
+    }
+
     m_hwndChecklistEdit = CreateWindow(L"EDIT", L"", 
         WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
         0, 0, 0, 0, m_hwnd, (HMENU)ID_CHECKLIST_EDIT, GetModuleHandle(NULL), NULL);
@@ -1658,13 +1906,11 @@ void MainWindow::OnSize(int width, int height) {
         int checklistHeight = clientHeight - editHeight - buttonHeight - 10;
         
         // Checklist edit box
-        MoveWindow(m_hwndChecklistEdit, rightPaneX + 5, toolbarHeight, rightPaneWidth - buttonWidth * 4 - 25, editHeight, TRUE);
+        MoveWindow(m_hwndChecklistEdit, rightPaneX + 5, toolbarHeight, rightPaneWidth - buttonWidth * 2 - 15, editHeight, TRUE);
         
         // Buttons
-        MoveWindow(m_hwndAddItem, width - buttonWidth * 4 - 10, toolbarHeight, buttonWidth, buttonHeight, TRUE);
-        MoveWindow(m_hwndRemoveItem, width - buttonWidth * 3 - 10, toolbarHeight, buttonWidth, buttonHeight, TRUE);
-        MoveWindow(m_hwndMoveUp, width - buttonWidth * 2 - 10, toolbarHeight, buttonWidth, buttonHeight, TRUE);
-        MoveWindow(m_hwndMoveDown, width - buttonWidth - 10, toolbarHeight, buttonWidth, buttonHeight, TRUE);
+        MoveWindow(m_hwndAddItem, width - buttonWidth * 2 - 10, toolbarHeight, buttonWidth, buttonHeight, TRUE);
+        MoveWindow(m_hwndRemoveItem, width - buttonWidth - 10, toolbarHeight, buttonWidth, buttonHeight, TRUE);
         
         // Checklist list
         MoveWindow(m_hwndChecklistList, rightPaneX, checklistTop, rightPaneWidth, checklistHeight, TRUE);
@@ -2324,6 +2570,13 @@ LRESULT MainWindow::OnNotify(WPARAM wParam, LPARAM lParam) {
                 CancelChecklistItemEdit();
                 return 0;
             }
+        }
+        if (pnmh->code == LVN_BEGINDRAG) {
+            LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
+            if (pnmv && pnmv->iItem >= 0) {
+                BeginChecklistItemDrag(pnmv->iItem);
+            }
+            return 0;
         }
         if (pnmh->code == LVN_ITEMCHANGED) {
             LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
@@ -3723,8 +3976,8 @@ void MainWindow::UpdateChecklistUI() {
         ShowWindow(m_hwndChecklistEdit, SW_SHOW);
         ShowWindow(m_hwndAddItem, SW_SHOW);
         ShowWindow(m_hwndRemoveItem, SW_SHOW);
-        ShowWindow(m_hwndMoveUp, SW_SHOW);
-        ShowWindow(m_hwndMoveDown, SW_SHOW);
+        ShowWindow(m_hwndMoveUp, SW_HIDE);
+        ShowWindow(m_hwndMoveDown, SW_HIDE);
         
         // Load checklist items
         ListView_DeleteAllItems(m_hwndChecklistList);
@@ -3896,22 +4149,113 @@ void MainWindow::RemoveChecklistItem() {
     }
 }
 
+bool MainWindow::ReorderChecklistItem(int sourceIndex, int insertIndex) {
+    if (m_currentNoteIndex < 0 || m_currentNoteIndex >= (int)m_notes.size()) {
+        return false;
+    }
+
+    auto& items = m_notes[m_currentNoteIndex].checklist_items;
+    int itemCount = (int)items.size();
+    if (sourceIndex < 0 || sourceIndex >= itemCount) {
+        return false;
+    }
+
+    if (insertIndex < 0) insertIndex = 0;
+    if (insertIndex > itemCount) insertIndex = itemCount;
+
+    if (insertIndex == sourceIndex || insertIndex == sourceIndex + 1) {
+        return true;
+    }
+
+    ChecklistItem moved = items[sourceIndex];
+    items.erase(items.begin() + sourceIndex);
+
+    int targetIndex = insertIndex;
+    if (targetIndex > sourceIndex) {
+        targetIndex--;
+    }
+    if (targetIndex < 0) targetIndex = 0;
+    if (targetIndex > (int)items.size()) targetIndex = (int)items.size();
+
+    items.insert(items.begin() + targetIndex, moved);
+
+    for (int i = 0; i < (int)items.size(); ++i) {
+        items[i].item_order = i;
+        m_db->UpdateChecklistItem(items[i]);
+    }
+
+    UpdateChecklistUI();
+
+    m_suppressChecklistSelectionEdit = true;
+    ListView_SetItemState(m_hwndChecklistList, targetIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    m_suppressChecklistSelectionEdit = false;
+
+    return true;
+}
+
+int MainWindow::GetChecklistInsertIndexFromScreenPoint(POINTL ptScreen) const {
+    if (!m_hwndChecklistList || !m_checklistMode || m_currentNoteIndex < 0 || m_currentNoteIndex >= (int)m_notes.size()) {
+        return -1;
+    }
+
+    POINT pt = { ptScreen.x, ptScreen.y };
+    ScreenToClient(m_hwndChecklistList, &pt);
+
+    int count = ListView_GetItemCount(m_hwndChecklistList);
+    if (count <= 0) {
+        return 0;
+    }
+
+    RECT rcClient = {0};
+    GetClientRect(m_hwndChecklistList, &rcClient);
+    if (pt.y < 0) {
+        return 0;
+    }
+    if (pt.y >= rcClient.bottom) {
+        return count;
+    }
+
+    LVHITTESTINFO hti = {};
+    hti.pt = pt;
+    int hit = ListView_HitTest(m_hwndChecklistList, &hti);
+    if (hit < 0) {
+        return count;
+    }
+
+    RECT rcItem = {0};
+    if (!ListView_GetItemRect(m_hwndChecklistList, hit, &rcItem, LVIR_BOUNDS)) {
+        return count;
+    }
+
+    int mid = (rcItem.top + rcItem.bottom) / 2;
+    return (pt.y > mid) ? (hit + 1) : hit;
+}
+
+void MainWindow::BeginChecklistItemDrag(int sourceIndex) {
+    if (!m_checklistMode || sourceIndex < 0) {
+        return;
+    }
+
+    ChecklistDataObject* dataObject = new ChecklistDataObject(sourceIndex);
+    ChecklistDropSource* dropSource = new ChecklistDropSource();
+    if (!dataObject || !dropSource) {
+        if (dataObject) dataObject->Release();
+        if (dropSource) dropSource->Release();
+        return;
+    }
+
+    DWORD effect = DROPEFFECT_NONE;
+    DoDragDrop(dataObject, dropSource, DROPEFFECT_MOVE, &effect);
+
+    dataObject->Release();
+    dropSource->Release();
+}
+
 void MainWindow::MoveChecklistItemUp() {
     if (m_currentNoteIndex >= 0) {
         int selected = ListView_GetNextItem(m_hwndChecklistList, -1, LVNI_SELECTED);
         if (selected > 0) {
-            auto& items = m_notes[m_currentNoteIndex].checklist_items;
-            std::swap(items[selected], items[selected - 1]);
-            items[selected].item_order = selected;
-            items[selected - 1].item_order = selected - 1;
-            
-            m_db->UpdateChecklistItem(items[selected]);
-            m_db->UpdateChecklistItem(items[selected - 1]);
-            
-            UpdateChecklistUI();
-            m_suppressChecklistSelectionEdit = true;
-            ListView_SetItemState(m_hwndChecklistList, selected - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-            m_suppressChecklistSelectionEdit = false;
+            ReorderChecklistItem(selected, selected - 1);
         }
     }
 }
@@ -3921,17 +4265,7 @@ void MainWindow::MoveChecklistItemDown() {
         int selected = ListView_GetNextItem(m_hwndChecklistList, -1, LVNI_SELECTED);
         auto& items = m_notes[m_currentNoteIndex].checklist_items;
         if (selected >= 0 && selected < (int)items.size() - 1) {
-            std::swap(items[selected], items[selected + 1]);
-            items[selected].item_order = selected;
-            items[selected + 1].item_order = selected + 1;
-            
-            m_db->UpdateChecklistItem(items[selected]);
-            m_db->UpdateChecklistItem(items[selected + 1]);
-            
-            UpdateChecklistUI();
-            m_suppressChecklistSelectionEdit = true;
-            ListView_SetItemState(m_hwndChecklistList, selected + 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-            m_suppressChecklistSelectionEdit = false;
+            ReorderChecklistItem(selected, selected + 2);
         }
     }
 }

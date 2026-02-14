@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <ole2.h>
 #include <string>
 #include "window.h"
 #include "database.h"
@@ -48,12 +49,19 @@ static std::wstring ResolveDatabasePath() {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    HRESULT oleInit = OleInitialize(NULL);
+    if (FAILED(oleInit)) {
+        MessageBox(NULL, L"Failed to initialize OLE.", L"Error", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
     // Initialize Database
     Database db;
     std::wstring dbPathW = ResolveDatabasePath();
     std::string dbPath = Utils::WideToUtf8(dbPathW);
     if (!db.Initialize(dbPath)) {
         MessageBox(NULL, L"Failed to initialize database.", L"Error", MB_OK | MB_ICONERROR);
+        OleUninitialize();
         return 1;
     }
 
@@ -68,6 +76,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         // Re-open DB after restore attempt.
         if (!db.Initialize(dbPath)) {
             MessageBox(NULL, L"Failed to initialize database.", L"Error", MB_OK | MB_ICONERROR);
+            OleUninitialize();
             return 1;
         }
         if (!restoreRes.success && !restoreRes.error.empty()) {
@@ -80,6 +89,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     MainWindow window(&db);
     if (!window.Create(L"NoteSoFast", WS_OVERLAPPEDWINDOW)) {
+        OleUninitialize();
         return 0;
     }
 
@@ -92,6 +102,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+
+    OleUninitialize();
 
     return 0;
 }
