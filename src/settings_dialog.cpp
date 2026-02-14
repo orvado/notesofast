@@ -478,7 +478,7 @@ INT_PTR CALLBACK AppearanceTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARA
             const wchar_t* fonts[] = { L"Segoe UI", L"Arial", L"Courier New", L"Consolas", L"Georgia", L"Times New Roman", L"Verdana" };
             for (auto f : fonts) SendMessage(hComboFont, CB_ADDSTRING, 0, (LPARAM)f);
             
-            std::string fontFace = pData->db->GetSetting("font_face", "Segoe UI");
+            std::string fontFace = pData->db->GetSetting("font_face", "Consolas");
             std::wstring wFontFace = Utils::Utf8ToWide(fontFace);
             SendMessage(hComboFont, CB_SELECTSTRING, -1, (LPARAM)wFontFace.c_str());
 
@@ -487,7 +487,7 @@ INT_PTR CALLBACK AppearanceTabProc(HWND hDlg, UINT message, WPARAM wParam, LPARA
             const wchar_t* sizes[] = { L"8", L"9", L"10", L"11", L"12", L"14", L"16", L"18", L"20", L"22", L"24", L"26", L"28", L"36", L"48", L"72" };
             for (auto s : sizes) SendMessage(hComboSize, CB_ADDSTRING, 0, (LPARAM)s);
             
-            std::string fontSize = pData->db->GetSetting("font_size", "10");
+            std::string fontSize = pData->db->GetSetting("font_size", "11");
             std::wstring wFontSize = Utils::Utf8ToWide(fontSize);
             SendMessage(hComboSize, CB_SELECTSTRING, -1, (LPARAM)wFontSize.c_str());
 

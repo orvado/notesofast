@@ -821,6 +821,13 @@ MainWindow::MainWindow(Database* db) : m_hwnd(NULL), m_hwndList(NULL), m_hwndEdi
     // Restore note list sort order.
     std::string sortStr = m_db->GetSetting("NoteSortBy", "DateModified");
     m_sortBy = ParseNoteSortBySetting(sortStr, Database::SortBy::DateModified);
+
+    std::string splitterPosStr = m_db->GetSetting("SplitterPos", "250");
+    try {
+        m_splitPos = std::stoi(splitterPosStr);
+    } catch (...) {
+        m_splitPos = 250;
+    }
 }
 
 MainWindow::~MainWindow() {
@@ -927,6 +934,9 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
         return 0;
     case WM_CLOSE:
+        if (m_db) {
+            m_db->SetSetting("SplitterPos", std::to_string(m_splitPos));
+        }
         SaveCurrentNote();
         KillTimer(m_hwnd, ID_CLOUDSYNC_TIMER);
         SyncDatabaseOnExitIfEnabled();
@@ -1519,21 +1529,21 @@ void MainWindow::ApplyEditorFontFromSettings() {
         return;
     }
 
-    std::string faceUtf8 = m_db->GetSetting("font_face", "Segoe UI");
-    std::string sizeUtf8 = m_db->GetSetting("font_size", "10");
+    std::string faceUtf8 = m_db->GetSetting("font_face", "Consolas");
+    std::string sizeUtf8 = m_db->GetSetting("font_size", "11");
 
-    int pt = 10;
+    int pt = 11;
     try {
         pt = std::stoi(sizeUtf8);
     } catch (...) {
-        pt = 10;
+        pt = 11;
     }
     if (pt < 6) pt = 6;
     if (pt > 72) pt = 72;
 
     std::wstring face = Utils::Utf8ToWide(faceUtf8);
     if (face.empty()) {
-        face = L"Segoe UI";
+        face = L"Consolas";
     }
 
     int dpiY = 96;
@@ -1550,7 +1560,7 @@ void MainWindow::ApplyEditorFontFromSettings() {
     if (!hNew) {
         hNew = CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+            DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
     }
     if (!hNew) {
         return;
@@ -1591,6 +1601,18 @@ void MainWindow::ApplyEditorFontFromSettings() {
 }
 
 void MainWindow::OnSize(int width, int height) {
+    const int minPaneWidth = 100;
+    int maxSplit = width - SPLITTER_WIDTH - minPaneWidth;
+    if (maxSplit < minPaneWidth) {
+        maxSplit = minPaneWidth;
+    }
+    if (m_splitPos < minPaneWidth) {
+        m_splitPos = minPaneWidth;
+    }
+    if (m_splitPos > maxSplit) {
+        m_splitPos = maxSplit;
+    }
+
     int statusHeight = 0;
     if (m_hwndStatus) {
         // Resize Status Bar
@@ -2490,7 +2512,9 @@ void MainWindow::OnMouseMove(int x, int y) {
         // Limit splitter range
         int minWidth = 100;
         if (x < minWidth) x = minWidth;
-        if (x > rc.right - minWidth) x = rc.right - minWidth;
+        int maxSplit = rc.right - SPLITTER_WIDTH - minWidth;
+        if (maxSplit < minWidth) maxSplit = minWidth;
+        if (x > maxSplit) x = maxSplit;
         
         m_splitPos = x;
         OnSize(rc.right, rc.bottom); // Trigger layout update
@@ -4436,8 +4460,8 @@ POINT MainWindow::GetCharPosition(int index) const {
     POINT pt = {0, 0};
     LRESULT res = SendMessage(m_hwndEdit, EM_POSFROMCHAR, index, 0);
     if (res != -1) {
-        pt.x = LOWORD(res);
-        pt.y = HIWORD(res);
+        pt.x = (int)(short)LOWORD(res);
+        pt.y = (int)(short)HIWORD(res);
     }
     return pt;
 }
@@ -4446,6 +4470,11 @@ void MainWindow::DrawSpellUnderlines(HDC hdc) const {
     if (m_lastMisses.empty() || hdc == NULL) {
         return;
     }
+
+    RECT rcClient = {0};
+    GetClientRect(m_hwndEdit, &rcClient);
+    int oldDc = SaveDC(hdc);
+    IntersectClipRect(hdc, rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
 
     HPEN pen = CreatePen(PS_SOLID, 1, RGB(200, 0, 0));
     HGDIOBJ oldPen = SelectObject(hdc, pen);
@@ -4489,6 +4518,16 @@ void MainWindow::DrawSpellUnderlines(HDC hdc) const {
             }
 
             int y = pStart.y + underlineY;
+            if (y < rcClient.top || y >= rcClient.bottom) {
+                start = segmentEnd;
+                continue;
+            }
+
+            if (pEnd.x <= rcClient.left || pStart.x >= rcClient.right) {
+                start = segmentEnd;
+                continue;
+            }
+
             MoveToEx(hdc, pStart.x, y, NULL);
             LineTo(hdc, pEnd.x, y);
 
@@ -4499,6 +4538,7 @@ void MainWindow::DrawSpellUnderlines(HDC hdc) const {
     SelectObject(hdc, oldFont);
     SelectObject(hdc, oldPen);
     DeleteObject(pen);
+    RestoreDC(hdc, oldDc);
 }
 
 void MainWindow::ResetWordUndoState() {
